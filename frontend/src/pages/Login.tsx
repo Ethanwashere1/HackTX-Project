@@ -1,7 +1,8 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import campusHero from "../assets/campus-hero.png";
-import { api } from "../api/client";
+import { api, SEED_USERS, type SeedUser } from "../api/client";
+import { ApiError, errorMessage } from "../api/errors";
 import { useAuth } from "../auth/AuthContext";
 import "./Login.css";
 
@@ -9,16 +10,41 @@ export function LoginPage() {
   const { me, loginDev, loading } = useAuth();
   const navigate = useNavigate();
   const [params] = useSearchParams();
-  const next = params.get("next") || "/orgs/org_ut";
+  const next = params.get("next") || "/";
+  const oauthError = params.get("error");
+  const [error, setError] = useState<string | null>(
+    oauthError === "oauth_access_denied" ? "Google sign-in was cancelled." : oauthError,
+  );
+  const [busy, setBusy] = useState<string | null>(null);
+  // The dev-login picker: only under `vite dev` or in mock mode. The backend also refuses
+  // dev-login unless APP_ENV is local/test and DEV_LOGIN=1.
+  const showDevLogin = import.meta.env.DEV || api.useMocks();
 
   useEffect(() => {
     if (!loading && me) navigate(next, { replace: true });
   }, [loading, me, navigate, next]);
 
-  async function onGoogle() {
-    if (api.useMocks() || params.get("dev") === "1") {
-      await loginDev();
+  async function onDevLogin(user: SeedUser) {
+    setBusy(user.email);
+    setError(null);
+    try {
+      await loginDev(user);
       navigate(next);
+    } catch (e) {
+      setError(
+        errorMessage(e) +
+          (e instanceof ApiError && e.status === 404
+            ? " (start the backend with APP_ENV=local DEV_LOGIN=1)"
+            : ""),
+      );
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  function onGoogle() {
+    if (api.useMocks()) {
+      void onDevLogin(SEED_USERS[0]);
       return;
     }
     window.location.href = api.googleLoginUrl(next);
@@ -46,7 +72,7 @@ export function LoginPage() {
 
           <hr className="login-rule" />
 
-          <button type="button" className="su-btn su-btn-google" onClick={() => void onGoogle()}>
+          <button type="button" className="su-btn su-btn-google" onClick={onGoogle}>
             <span className="g">G</span>
             Continue with Google
             <span aria-hidden>→</span>
@@ -56,6 +82,33 @@ export function LoginPage() {
             <br />
             By continuing, you agree to our Terms & Privacy Policy.
           </p>
+          {error ? (
+            <p role="alert" style={{ color: "var(--su-danger)", margin: "0.5rem 0 0" }}>
+              {error}
+            </p>
+          ) : null}
+
+          {showDevLogin ? (
+            <div className="su-card" style={{ padding: "0.85rem", marginTop: "1rem", boxShadow: "none" }}>
+              <p style={{ margin: "0 0 0.6rem", fontSize: "0.8rem", color: "var(--su-text-muted)" }}>
+                Dev login (seed users)
+              </p>
+              <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+                {SEED_USERS.map((u) => (
+                  <button
+                    key={u.email}
+                    type="button"
+                    className="su-btn su-btn-secondary"
+                    disabled={busy !== null}
+                    title={u.email}
+                    onClick={() => void onDevLogin(u)}
+                  >
+                    {busy === u.email ? "Signing in…" : u.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
 
           <div className="login-divider">
             <span />

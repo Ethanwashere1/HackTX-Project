@@ -7,14 +7,14 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { api } from "../api/client";
+import { api, type SeedUser } from "../api/client";
 import type { Me } from "../api/types";
 
 type AuthState = {
   me: Me | null;
   loading: boolean;
   refresh: () => Promise<void>;
-  loginDev: () => Promise<void>;
+  loginDev: (user: SeedUser) => Promise<void>;
   logout: () => Promise<void>;
 };
 
@@ -24,10 +24,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [me, setMe] = useState<Me | null>(null);
   const [loading, setLoading] = useState(true);
 
+  // `loading` is only true for the first check: a later refresh (e.g. after joining an org) must
+  // not make RequireAuth unmount the page that asked for it.
   const refresh = useCallback(async () => {
-    setLoading(true);
     try {
       setMe(await api.me());
+    } catch {
+      setMe(null); // backend unreachable: show the login page rather than spin
     } finally {
       setLoading(false);
     }
@@ -42,8 +45,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       me,
       loading,
       refresh,
-      async loginDev() {
-        setMe(await api.devLogin());
+      async loginDev(user: SeedUser) {
+        setMe(await api.devLogin(user));
       },
       async logout() {
         await api.logout();

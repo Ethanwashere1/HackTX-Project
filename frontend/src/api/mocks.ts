@@ -1,14 +1,26 @@
+// Mock mode (VITE_USE_MOCKS=1): an in-memory stand-in for the backend with the real response
+// shapes, so every page renders without a server. State lives for the page load.
+import type { Api, InterviewSocket, SeedUser } from "./client";
+import { ApiError } from "./errors";
 import type {
   Connection,
   EventDetail,
   GroupPage,
+  InterviewServerMessage,
+  JoinRequest,
   Me,
-  OrgFeed,
+  Message,
+  Org,
+  OrgFeedEvent,
   Profile,
   RecommendationsResponse,
   RequestItem,
-  Thread,
+  ThreadInfo,
 } from "./types";
+
+const now = () => new Date().toISOString();
+const clone = <T>(v: T): T => structuredClone(v);
+const delay = <T>(v: T, ms = 120) => new Promise<T>((r) => window.setTimeout(() => r(v), ms));
 
 export const mockMe: Me = {
   user_id: "usr_maya",
@@ -18,69 +30,67 @@ export const mockMe: Me = {
   orgs: [{ org_id: "org_ut", name: "UT Austin" }],
   contacts: [
     { kind: "discord", value: "maya#2048" },
-    { kind: "github", value: "mayachen" },
+    { kind: "phone", value: "+1 512-555-0199" },
   ],
 };
 
-export const mockOrgFeed: OrgFeed = {
-  org_id: "org_ut",
-  name: "UT Austin",
-  events: [
-    {
-      event_id: "evt_hacktx",
-      name: "HackTX team-up",
-      type: "structured",
-      tone: "casual",
-      starts_at: "2026-10-25T15:00:00Z",
-      member_count: 42,
-      joined: false,
-      tag: "TEAM EVENT",
-      description: "Form a 3–4 person squad for HackTX. Matched by skills and vibe.",
-      location: "UT Austin · GDC",
-    },
-    {
-      event_id: "evt_study",
-      name: "Study buddies",
-      type: "informal",
-      tone: "casual",
-      starts_at: "2026-10-26T18:00:00Z",
-      member_count: 18,
-      joined: false,
-      tag: "1:1 CONNECTION",
-      description: "Find someone to grind midterms with — no groups, just 1:1 matches.",
-      location: "PCL · online",
-    },
-    {
-      event_id: "evt_photo",
-      name: "Campus photo walk",
-      type: "informal",
-      tone: "casual",
-      starts_at: "2026-10-27T17:30:00Z",
-      member_count: 11,
-      joined: false,
-      tag: "CASUAL GROUP",
-      description: "Golden-hour walk around the Tower. Bring any camera.",
-      location: "Main Mall",
-    },
-    {
-      event_id: "evt_coffee",
-      name: "Coffee & vinyl",
-      type: "informal",
-      tone: "casual",
-      starts_at: "2026-10-28T19:00:00Z",
-      member_count: 9,
-      joined: false,
-      tag: "SOCIAL",
-      description: "Low-key hang at a local shop. Swap playlists and meet people.",
-      location: "Guadalupe",
-    },
-  ],
-};
+let signedIn = false;
 
-export const mockEvents: Record<string, EventDetail> = {
-  evt_hacktx: {
-    event_id: "evt_hacktx",
+const mockOrgs: Org[] = [
+  {
     org_id: "org_ut",
+    name: "UT Austin",
+    verification: "email_domain",
+    email_domains: ["utexas.edu"],
+    discoverable: true,
+    member_count: 312,
+    my_role: "admin",
+    my_status: "approved",
+  },
+  {
+    org_id: "org_acc",
+    name: "Austin Creative Collective",
+    verification: "manual",
+    email_domains: [],
+    discoverable: true,
+    member_count: 48,
+    my_role: null,
+    my_status: null,
+  },
+];
+
+const mockJoinRequests: Record<string, JoinRequest[]> = {
+  org_ut: [
+    {
+      user_id: "usr_ben",
+      name: "Ben Li",
+      email: "ben@gmail.com",
+      message: "CS junior, here for HackTX",
+      requested_at: "2026-10-24T22:10:00Z",
+      roster_match: "name",
+    },
+    {
+      user_id: "usr_kai",
+      name: "Kai Nguyen",
+      email: "kai@outlook.com",
+      message: null,
+      requested_at: "2026-10-24T23:40:00Z",
+      roster_match: null,
+    },
+  ],
+};
+
+const baseEvent = {
+  org_id: "org_ut",
+  created_at: "2026-10-24T20:00:00Z",
+  host: { user_id: "usr_morgan", name: "Morgan Reyes" },
+  my_membership: null,
+};
+
+const mockEvents: Record<string, EventDetail> = {
+  evt_hacktx: {
+    ...baseEvent,
+    event_id: "evt_hacktx",
     name: "HackTX team-up",
     description: "Find your hackathon team. Mutual consent before anything forms.",
     type: "structured",
@@ -98,212 +108,550 @@ export const mockEvents: Record<string, EventDetail> = {
         options: ["frontend", "backend", "design", "ml"],
         required: true,
       },
-      {
-        question_id: "q_2",
-        text: "What do you want to build?",
-        kind: "text",
-        options: null,
-        required: false,
-      },
+      { question_id: "q_2", text: "What do you want to build?", kind: "text", options: null, required: false },
       {
         question_id: "q_3",
-        text: "Weekend energy?",
-        kind: "single_choice",
-        options: ["chill builder", "competitive", "explore & learn"],
-        required: true,
+        text: "Which tracks interest you?",
+        kind: "multi_choice",
+        options: ["Education", "Social good", "Sustainability", "Health"],
+        required: false,
       },
     ],
     interview_enabled: true,
     starts_at: "2026-10-25T15:00:00Z",
-    created_at: "2026-10-24T20:00:00Z",
-    share_url: "https://squadup.tech/events/evt_hacktx",
-    host: { user_id: "usr_elena", name: "Elena Brooks" },
-    my_membership: null,
+    share_url: "http://localhost:5173/events/evt_hacktx",
     stats: { member_count: 42, groups_formed: 3 },
   },
   evt_study: {
+    ...baseEvent,
     event_id: "evt_study",
-    org_id: "org_ut",
     name: "Study buddies",
-    description: "1:1 connections for studying — no groups.",
+    description: "1:1 connections for studying, no groups.",
     type: "informal",
     tone: "casual",
     group_count: null,
     min_size: null,
     max_size: null,
     max_groups_per_user: null,
-    required_fields: ["subjects"],
+    required_fields: ["major"],
     questions: [
-      {
-        question_id: "q_s1",
-        text: "What are you studying?",
-        kind: "text",
-        options: null,
-        required: true,
-      },
+      { question_id: "q_s1", text: "Which courses are you taking?", kind: "text", options: null, required: true },
+      { question_id: "q_s2", text: "Hours per week you can study together", kind: "number", options: null, required: false },
     ],
     interview_enabled: false,
     starts_at: "2026-10-26T18:00:00Z",
-    created_at: "2026-10-24T18:00:00Z",
-    share_url: "https://squadup.tech/events/evt_study",
-    host: { user_id: "usr_jordan", name: "Jordan Lee" },
-    my_membership: null,
+    share_url: "http://localhost:5173/events/evt_study",
     stats: { member_count: 18, groups_formed: 0 },
   },
 };
 
-export const mockRecommendations: RecommendationsResponse = {
-  ranked_by: "agent",
-  results: [
-    {
-      candidate_type: "group",
-      id: "grp_pixel",
-      name: "Pixel Pioneers",
-      score: 0.91,
-      reason:
-        "Looking for a frontend/React person; your climate-apps interest lines up with their product angle.",
-      subtitle: "HackTX · 3 of 4 members",
-      tags: ["frontend", "product", "casual"],
-      member_count: "3/4",
-    },
-    {
-      candidate_type: "user",
-      id: "usr_ben",
-      name: "Ben Li",
-      score: 0.86,
-      reason: "Backend + ML overlap; both want an ambitious but friendly weekend pace.",
-      subtitle: "CS junior · backend/ML",
-      tags: ["backend", "ml"],
-    },
-    {
-      candidate_type: "group",
-      id: "grp_lens",
-      name: "Lens & Light",
-      score: 0.78,
-      reason: "Creative side project energy — good backup if Pixel Pioneers fills up.",
-      subtitle: "HackTX · 2 of 4 members",
-      tags: ["design", "story"],
-      member_count: "2/4",
-    },
-  ],
+function feedItem(e: EventDetail): OrgFeedEvent {
+  return {
+    event_id: e.event_id,
+    name: e.name,
+    type: e.type,
+    tone: e.tone,
+    starts_at: e.starts_at,
+    member_count: e.stats.member_count,
+    joined: e.my_membership !== null,
+  };
+}
+
+const people: RecommendationsResponse["people"] = [
+  {
+    user_id: "usr_ben",
+    name: "Ben Li",
+    summary: "Backend engineer focused on APIs and databases.",
+    score: 0.86,
+    reason: "Backend and ML overlap; both want an ambitious but friendly weekend pace.",
+  },
+  {
+    user_id: "usr_priya",
+    name: "Priya Sharma",
+    summary: "ML / NLP builder who wants to ship an LLM demo.",
+    score: 0.79,
+    reason: null,
+  },
+];
+
+const groups: RecommendationsResponse["groups"] = [
+  {
+    group_id: "grp_neural",
+    name: "Team Neural",
+    size: 2,
+    max_size: 4,
+    members: [
+      { user_id: "usr_dev", name: "Dev Patel" },
+      { user_id: "usr_eli", name: "Eli Park" },
+    ],
+    score: 0.91,
+    reason: "They're missing a frontend person and you listed React.",
+  },
+];
+
+const mockConnections: Connection[] = [
+  {
+    connection_id: "con_1",
+    user_id: "usr_hiro",
+    name: "Hiro Tanaka",
+    summary: "Grinding CS 439 this week, prefers quiet library sessions.",
+    contacts: [{ kind: "discord", value: "hiro#7781" }],
+    thread_id: "thr_1",
+    connected_at: "2026-10-24T22:00:00Z",
+  },
+];
+
+const mockGroups: Record<string, GroupPage> = {
+  grp_pixel: {
+    group_id: "grp_pixel",
+    event_id: "evt_hacktx",
+    name: "Team Pixel",
+    thread_id: "thr_g1",
+    members: [
+      {
+        user_id: "usr_ben",
+        name: "Ben Li",
+        summary: "Backend engineer focused on APIs and databases.",
+        contacts: [
+          { kind: "discord", value: "benli#4411" },
+          { kind: "phone", value: "+1 512-555-0102" },
+        ],
+      },
+      {
+        user_id: "usr_cara",
+        name: "Cara Okafor",
+        summary: "Product designer, Figma and user research.",
+        contacts: [{ kind: "github", value: "cara-designs" }],
+      },
+    ],
+  },
 };
 
-export const mockRequests: RequestItem[] = [
+let mockRequests: RequestItem[] = [
   {
     request_id: "req_1",
+    event_id: "evt_hacktx",
     direction: "incoming",
+    sender: { user_id: "usr_ben", name: "Ben Li" },
     target_type: "user",
-    target_id: "usr_maya",
-    target_name: "Pixel Pioneers → you",
+    target: { user_id: "usr_maya", name: "Maya Chen" },
+    other_party: { type: "user", id: "usr_ben", name: "Ben Li" },
+    message: "Want to team up? I can cover the backend.",
     status: "pending",
-    preview: "Want to chat about joining our HackTX squad?",
-    created_at: "2026-10-25T01:10:00Z",
     thread_id: "thr_1",
+    group_id: null,
+    connection_id: null,
+    created_at: "2026-10-25T01:10:00Z",
+    decided_at: null,
   },
   {
     request_id: "req_2",
+    event_id: "evt_hacktx",
     direction: "outgoing",
+    sender: { user_id: "usr_maya", name: "Maya Chen" },
     target_type: "group",
-    target_id: "grp_pixel",
-    target_name: "Pixel Pioneers",
+    target: { group_id: "grp_neural", name: "Team Neural" },
+    other_party: { type: "group", id: "grp_neural", name: "Team Neural" },
+    message: "I'd love to do the frontend for you.",
     status: "pending",
-    preview: "You requested to join · awaiting mutual accept",
+    thread_id: "thr_2",
+    group_id: null,
+    connection_id: null,
     created_at: "2026-10-25T01:05:00Z",
+    decided_at: null,
+  },
+];
+
+const mockThreads: Record<string, ThreadInfo> = {
+  thr_1: {
     thread_id: "thr_1",
+    kind: "request",
+    title: "Ben Li",
+    event_id: "evt_hacktx",
+    group_id: null,
+    request_id: "req_1",
+    participants: [
+      { user_id: "usr_ben", name: "Ben Li" },
+      { user_id: "usr_maya", name: "Maya Chen" },
+    ],
   },
-];
+  thr_2: {
+    thread_id: "thr_2",
+    kind: "request",
+    title: "Team Neural",
+    event_id: "evt_hacktx",
+    group_id: "grp_neural",
+    request_id: "req_2",
+    participants: [
+      { user_id: "usr_maya", name: "Maya Chen" },
+      { user_id: "usr_dev", name: "Dev Patel" },
+      { user_id: "usr_eli", name: "Eli Park" },
+    ],
+  },
+  thr_g1: {
+    thread_id: "thr_g1",
+    kind: "group",
+    title: "Team Pixel",
+    event_id: "evt_hacktx",
+    group_id: "grp_pixel",
+    request_id: null,
+    participants: [
+      { user_id: "usr_ben", name: "Ben Li" },
+      { user_id: "usr_cara", name: "Cara Okafor" },
+      { user_id: "usr_maya", name: "Maya Chen" },
+    ],
+  },
+};
 
-export const mockThread: Thread = {
-  thread_id: "thr_1",
-  title: "Pixel Pioneers · Pre-join chat",
-  call_url: "https://meet.jit.si/squadup-pixel-pioneers",
-  messages: [
+const mockMessages: Record<string, Message[]> = {
+  thr_1: [
     {
-      message_id: "msg_1",
-      sender_id: "usr_jordan",
-      sender_name: "Jordan Lee",
-      text: "Hey Maya! We're building a campus matching tool — would love a React person.",
-      created_at: "2026-10-25T01:06:00Z",
+      message_id: "msg_001",
+      sender_id: "usr_ben",
+      sender_name: "Ben Li",
+      text: "Hey! I saw you're doing frontend. I've got an API idea for bus arrivals.",
+      sent_at: "2026-10-25T01:06:00Z",
     },
+  ],
+  thr_2: [],
+  thr_g1: [
     {
-      message_id: "msg_2",
-      sender_id: "usr_maya",
-      sender_name: "Maya Chen",
-      text: "That sounds perfect. I'm free for a quick call if you want.",
-      created_at: "2026-10-25T01:08:00Z",
+      message_id: "msg_002",
+      sender_id: "usr_cara",
+      sender_name: "Cara Okafor",
+      text: "Sketching the onboarding flow in Figma now.",
+      sent_at: "2026-10-25T02:00:00Z",
     },
   ],
 };
+let messageSeq = 100;
 
-export const mockGroup: GroupPage = {
-  group_id: "grp_pixel",
-  name: "Pixel Pioneers",
-  event_id: "evt_hacktx",
-  event_name: "HackTX team-up",
-  thread_id: "thr_1",
-  members: [
-    {
-      user_id: "usr_jordan",
-      name: "Jordan Lee",
-      role: "Backend",
-      summary: "Wants a chill but ambitious team.",
-      contacts: [
-        { kind: "discord", value: "jordan#4411" },
-        { kind: "phone", value: "+1 512-555-0142" },
-      ],
-    },
-    {
-      user_id: "usr_pp",
-      name: "Priya Patel",
-      role: "ML",
-      summary: "Climate + NLP nerd.",
-      contacts: [{ kind: "github", value: "priyapatel" }],
-    },
-    {
-      user_id: "usr_maya",
-      name: "Maya Chen",
-      role: "Frontend",
-      summary: "React · product polish.",
-      contacts: [
-        { kind: "discord", value: "maya#2048" },
-        { kind: "github", value: "mayachen" },
-      ],
-    },
-  ],
-};
+const mockProfile = (): Profile => ({
+  user_id: mockMe.user_id,
+  name: mockMe.name,
+  email: mockMe.email,
+  summary: "Frontend-focused builder who loves climate apps; wants a chill but ambitious team.",
+  traits: { highlights: ["pairing", "wants to win", "free all weekend"] },
+  socials: [{ kind: "github", value: "mayachen" }],
+  contacts: clone(mockMe.contacts),
+  interviewed: true,
+});
 
-export const mockConnections: Connection[] = [
-  {
-    user_id: "usr_sam",
-    name: "Sam Ortiz",
-    reason: "Both grinding discrete math midterms this week.",
-    tags: ["CS 331", "evening"],
-  },
-  {
-    user_id: "usr_riley",
-    name: "Riley Kim",
-    reason: "Prefers quiet library sessions and shared notes.",
-    tags: ["PCL", "notes"],
-  },
-];
+function notFound(what: string): never {
+  throw new ApiError(404, "not_found", `${what} not found`);
+}
 
-export const mockProfile: Profile = {
-  user_id: "usr_maya",
-  name: "Maya Chen",
-  email: "maya@utexas.edu",
-  summary:
-    "Frontend-focused builder who loves climate apps; wants a chill but ambitious HackTX team.",
-  traits: {
-    working_style: "pairing",
-    ambition: "win",
-    availability: "all weekend",
+function eventOr404(eventId: string): EventDetail {
+  return mockEvents[eventId] ?? notFound("Event");
+}
+
+/** Plays the interview protocol (contract section 9) locally. */
+class MockInterviewSocket implements InterviewSocket {
+  onopen: ((ev: Event) => void) | null = null;
+  onmessage: ((ev: MessageEvent) => void) | null = null;
+  onerror: ((ev: Event) => void) | null = null;
+  onclose: ((ev: CloseEvent) => void) | null = null;
+  readyState = 0;
+  private heardAudio = false;
+  private timers: number[] = [];
+
+  constructor() {
+    this.later(50, () => {
+      this.readyState = 1;
+      this.onopen?.(new Event("open"));
+      this.emit({
+        type: "ready",
+        greeting_text: `Hey ${mockMe.name.split(" ")[0]}! What are you hoping to build or find here?`,
+      });
+    });
+  }
+
+  private later(ms: number, fn: () => void) {
+    this.timers.push(window.setTimeout(fn, ms));
+  }
+
+  private emit(msg: InterviewServerMessage) {
+    if (this.readyState !== 1) return;
+    this.onmessage?.(new MessageEvent("message", { data: JSON.stringify(msg) }));
+  }
+
+  private reply(text: string) {
+    this.later(700, () => {
+      this.emit({ type: "transcript", role: "interviewer", text, final: true });
+      this.emit({ type: "turn_complete" });
+    });
+  }
+
+  send(data: string) {
+    const msg = JSON.parse(data) as { type: string; text?: string };
+    if (msg.type === "text") {
+      this.reply("Love that. Competitive or chill builder energy this weekend?");
+    } else if (msg.type === "audio" && !this.heardAudio) {
+      this.heardAudio = true;
+      this.later(1200, () =>
+        this.emit({
+          type: "transcript",
+          role: "user",
+          text: "I'm mostly React and frontend. I want a climate or campus-tools angle.",
+          final: true,
+        }),
+      );
+      this.reply("Nice. What kind of teammates help you do your best work?");
+    } else if (msg.type === "end") {
+      this.later(600, () => {
+        this.emit({
+          type: "interview_complete",
+          summary_saved: true,
+          summary: "Frontend builder into climate and campus tools; wants a chill but ambitious team.",
+        });
+        this.close();
+      });
+    }
+  }
+
+  close() {
+    if (this.readyState === 3) return;
+    this.timers.forEach((t) => window.clearTimeout(t));
+    this.readyState = 3;
+    this.onclose?.(new CloseEvent("close"));
+  }
+}
+
+export const mockApi: Api = {
+  useMocks: () => true,
+
+  async me() {
+    return delay(signedIn ? clone(mockMe) : null, 0);
   },
-  contacts: [
-    { kind: "discord", value: "maya#2048" },
-    { kind: "phone", value: "+1 512-555-0199" },
-  ],
-  socials: [
-    { kind: "github", value: "mayachen" },
-    { kind: "instagram", value: "@maya.builds" },
-  ],
+  googleLoginUrl(next = "/") {
+    return `/login?next=${encodeURIComponent(next)}`;
+  },
+  async devLogin(user: SeedUser) {
+    signedIn = true;
+    mockMe.name = user.name;
+    mockMe.email = user.email;
+    return clone(mockMe);
+  },
+  async logout() {
+    signedIn = false;
+  },
+  async getProfile() {
+    return delay(mockProfile());
+  },
+  async saveContacts(contacts) {
+    mockMe.contacts = clone(contacts);
+    return delay(clone(contacts));
+  },
+
+  async listOrgs() {
+    return delay(clone(mockOrgs));
+  },
+  async getOrg(orgId) {
+    return delay(clone(mockOrgs.find((o) => o.org_id === orgId) ?? notFound("Organization")));
+  },
+  async createOrg(body) {
+    const org_id = `org_${mockOrgs.length + 1}`;
+    mockOrgs.push({
+      org_id,
+      name: body.name,
+      verification: body.verification,
+      email_domains: body.email_domains,
+      discoverable: body.discoverable,
+      member_count: 1,
+      my_role: "admin",
+      my_status: "approved",
+    });
+    mockMe.orgs.push({ org_id, name: body.name });
+    return delay({ org_id, verification: body.verification });
+  },
+  async joinOrg(orgId) {
+    const org = mockOrgs.find((o) => o.org_id === orgId) ?? notFound("Organization");
+    if (org.my_status === "approved") throw new ApiError(409, "already_member", "Already a member");
+    org.my_status = "pending";
+    return delay({ status: "pending" as const });
+  },
+  async orgFeed(orgId) {
+    const org = mockOrgs.find((o) => o.org_id === orgId);
+    if (!org || org.my_status !== "approved") {
+      throw new ApiError(403, "not_org_member", "Join this org to see its events");
+    }
+    const events = Object.values(mockEvents).filter((e) => e.org_id === orgId).map(feedItem);
+    return delay({ org_id: orgId, name: org.name, events });
+  },
+  async joinRequests(orgId) {
+    return delay(clone(mockJoinRequests[orgId] ?? []));
+  },
+  async decideJoinRequest(orgId, userId, action) {
+    mockJoinRequests[orgId] = (mockJoinRequests[orgId] ?? []).filter((r) => r.user_id !== userId);
+    return delay({ user_id: userId, status: action === "approve" ? ("approved" as const) : ("declined" as const) });
+  },
+
+  async getEvent(eventId) {
+    return delay(clone(eventOr404(eventId)));
+  },
+  async createEvent(body) {
+    const event_id = `evt_${Object.keys(mockEvents).length + 1}`;
+    mockEvents[event_id] = {
+      ...baseEvent,
+      event_id,
+      org_id: body.org_id ?? null,
+      name: body.name,
+      description: body.description,
+      type: body.type,
+      tone: body.tone,
+      group_count: body.group_count ?? null,
+      min_size: body.min_size ?? null,
+      max_size: body.max_size ?? null,
+      max_groups_per_user: body.type === "structured" ? (body.max_groups_per_user ?? 1) : null,
+      required_fields: body.required_fields,
+      questions: body.questions.map((qn, i) => ({ ...qn, question_id: `q_${event_id}_${i}` })),
+      interview_enabled: body.interview_enabled,
+      starts_at: body.starts_at ?? null,
+      host: { user_id: mockMe.user_id, name: mockMe.name },
+      share_url: `http://localhost:5173/events/${event_id}`,
+      stats: { member_count: 0, groups_formed: 0 },
+    };
+    return delay({ event_id, share_url: mockEvents[event_id].share_url });
+  },
+  async joinEvent(eventId) {
+    const evt = eventOr404(eventId);
+    if (evt.my_membership) throw new ApiError(409, "already_joined", "You already joined this event");
+    evt.my_membership = { joined_at: now(), group_id: null };
+    evt.stats.member_count += 1;
+    return delay({
+      event_id: eventId,
+      profile_status: "ready" as const,
+      interview: { available: evt.interview_enabled },
+    });
+  },
+  async startInterview(eventId) {
+    const evt = eventOr404(eventId);
+    if (!evt.my_membership) throw new ApiError(403, "forbidden", "Join the event first");
+    if (!evt.interview_enabled) throw new ApiError(409, "interview_disabled", "No interview");
+    return delay({ ws_url: "ws://mock/ws/interview", interview_token: "itk_mock", expires_in: 600 });
+  },
+  openInterviewSocket() {
+    return new MockInterviewSocket();
+  },
+  async recommendations(eventId) {
+    const evt = eventOr404(eventId);
+    if (!evt.my_membership) throw new ApiError(403, "forbidden", "Join the event to see recommendations");
+    if (evt.type === "informal") {
+      return delay({ ranked_by: "similarity" as const, people: clone(people), groups: [] });
+    }
+    if (evt.my_membership.group_id) {
+      return delay({ ranked_by: "similarity" as const, people: [], groups: [] });
+    }
+    const full = evt.group_count !== null && evt.stats.groups_formed >= evt.group_count;
+    return delay({
+      ranked_by: "gemini" as const,
+      people: full ? [] : clone(people),
+      groups: clone(groups),
+    });
+  },
+  async connections(eventId) {
+    const evt = eventOr404(eventId);
+    return delay(evt.type === "informal" ? clone(mockConnections) : []);
+  },
+
+  async createRequest(body) {
+    const evt = eventOr404(body.event_id);
+    const request_id = `req_${mockRequests.length + 10}`;
+    const thread_id = `thr_${request_id}`;
+    const targetName =
+      body.target_type === "group"
+        ? (groups.find((g) => g.group_id === body.target_id)?.name ?? "Group")
+        : (people.find((p) => p.user_id === body.target_id)?.name ?? "Someone");
+    mockRequests = [
+      {
+        request_id,
+        event_id: evt.event_id,
+        direction: "outgoing",
+        sender: { user_id: mockMe.user_id, name: mockMe.name },
+        target_type: body.target_type,
+        target:
+          body.target_type === "group"
+            ? { group_id: body.target_id, name: targetName }
+            : { user_id: body.target_id, name: targetName },
+        other_party: { type: body.target_type, id: body.target_id, name: targetName },
+        message: body.message ?? null,
+        status: "pending",
+        thread_id,
+        group_id: null,
+        connection_id: null,
+        created_at: now(),
+        decided_at: null,
+      },
+      ...mockRequests,
+    ];
+    mockThreads[thread_id] = {
+      thread_id,
+      kind: "request",
+      title: targetName,
+      event_id: evt.event_id,
+      group_id: body.target_type === "group" ? body.target_id : null,
+      request_id,
+      participants: [{ user_id: mockMe.user_id, name: mockMe.name }],
+    };
+    mockMessages[thread_id] = [];
+    return delay({ request_id, status: "pending" as const, thread_id });
+  },
+  async listRequests(box, eventId) {
+    return delay(
+      clone(mockRequests.filter((r) => r.direction === box && (!eventId || r.event_id === eventId))),
+    );
+  },
+  async respondRequest(requestId, action) {
+    const req = mockRequests.find((r) => r.request_id === requestId) ?? notFound("Request");
+    if (req.status !== "pending") throw new ApiError(409, "request_not_pending", "Already handled");
+    req.status = action === "accept" ? "accepted" : action === "decline" ? "declined" : "cancelled";
+    req.decided_at = now();
+    if (action === "accept") {
+      req.group_id = "grp_pixel";
+      const evt = mockEvents[req.event_id];
+      if (evt?.my_membership) evt.my_membership.group_id = "grp_pixel";
+    }
+    return delay({
+      request_id: req.request_id,
+      status: req.status,
+      group_id: req.group_id,
+      connection_id: req.connection_id,
+    });
+  },
+
+  async getThread(threadId) {
+    return delay(clone(mockThreads[threadId] ?? notFound("Thread")));
+  },
+  async listMessages(threadId, after) {
+    const all = mockMessages[threadId] ?? notFound("Thread");
+    return delay(clone(after ? all.filter((m) => m.message_id > after) : all), 40);
+  },
+  async sendMessage(threadId, text) {
+    const msg: Message = {
+      message_id: `msg_${++messageSeq}`,
+      sender_id: mockMe.user_id,
+      sender_name: mockMe.name,
+      text,
+      sent_at: now(),
+    };
+    (mockMessages[threadId] ??= []).push(msg);
+    return delay(clone(msg), 40);
+  },
+  async callUrl(threadId) {
+    return delay(`https://meet.jit.si/squadup-${threadId.replace("_", "")}-mock`);
+  },
+
+  async getGroup(groupId) {
+    const g = mockGroups[groupId] ?? notFound("Group");
+    const withMe: GroupPage = clone(g);
+    if (!withMe.members.some((m) => m.user_id === mockMe.user_id)) {
+      withMe.members.push({
+        user_id: mockMe.user_id,
+        name: mockMe.name,
+        summary: "React and product polish.",
+        contacts: clone(mockMe.contacts),
+      });
+    }
+    return delay(withMe);
+  },
 };
