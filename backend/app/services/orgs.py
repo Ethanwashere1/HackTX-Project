@@ -1,9 +1,14 @@
 """Orgs (contract section 2): admin checks, join auto-approval, roster parsing and the feed.
 
 Auto-approval: `email_domain` orgs approve a user whose email domain (or a subdomain of it) is
-listed; `roster` orgs approve a user whose email is on the roster, or whose name matches a roster
-row that has no email (a row with an email matches by email only, since names are self-chosen).
-Everything else waits for an admin, and `manual` orgs always wait.
+listed; `roster` orgs approve a user whose email is on the roster. Only the email counts, since
+Google verifies it: the name is the user's own Google display name, so a name matching a name-only
+roster row is just a hint for admins (`roster_match: "name"` in the join-requests list) and the
+request waits. Everything else waits for an admin too, and `manual` orgs always wait.
+
+A request made again after a decline always waits for an admin. Its pending row keeps the
+decline's `decided_at`/`decided_by`, while a first request has none: that is how the join and
+auto_approve_pending tell the two apart.
 """
 
 import csv
@@ -96,20 +101,36 @@ def require_admin(db: Session, org_id: str, user: User) -> Org:
 
 # --- auto-approval -------------------------------------------------------------------------------
 
+def roster_matcher(db: Session, org_id: str) -> Callable[[User], str | None]:
+    """How a user matches the org's roster: "email" (their email is listed), "name" (their name
+    matches a row that has no email), or None. A row with an email matches by email only."""
+    rows = db.exec(
+        select(OrgRosterEntry.email, OrgRosterEntry.name_normalized).where(
+            OrgRosterEntry.org_id == org_id
+        )
+    ).all()
+    emails = {e for e, _ in rows if e}
+    names = {n for e, n in rows if n and not e}
+
+    def match(u: User) -> str | None:
+        if u.email.lower() in emails:
+            return "email"
+        if normalize_name(u.name) in names:
+            return "name"
+        return None
+
+    return match
+
+
 def auto_matcher(db: Session, org: Org) -> Callable[[User], bool]:
-    """A predicate telling whether the org's verification method auto-approves a user."""
+    """A predicate telling whether the org's verification method auto-approves a user: on the
+    (Google-verified) email only, never on the self-chosen name."""
     if org.verification == "email_domain":
         domains = list(org.email_domains or [])
         return lambda u: _domain_matches(u.email, domains)
     if org.verification == "roster":
-        rows = db.exec(
-            select(OrgRosterEntry.email, OrgRosterEntry.name_normalized).where(
-                OrgRosterEntry.org_id == org.id
-            )
-        ).all()
-        emails = {e for e, _ in rows if e}
-        names = {n for e, n in rows if n and not e}
-        return lambda u: u.email.lower() in emails or normalize_name(u.name) in names
+        roster = roster_matcher(db, org.id)
+        return lambda u: roster(u) == "email"
     return lambda u: False
 
 
@@ -120,12 +141,17 @@ def approve(member: OrgMember, decided_by: str | None) -> None:
 
 
 def auto_approve_pending(db: Session, org: Org) -> int:
-    """Approve the org's pending requests that its verification method now accepts. No commit."""
+    """Approve the org's pending requests that its verification method now accepts, except
+    requests made again after a decline (those wait for an admin). No commit."""
     matches = auto_matcher(db, org)
     pending = db.exec(
         select(OrgMember, User)
         .join(User, User.id == OrgMember.user_id)
-        .where(OrgMember.org_id == org.id, OrgMember.status == "pending")
+        .where(
+            OrgMember.org_id == org.id,
+            OrgMember.status == "pending",
+            col(OrgMember.decided_at).is_(None),
+        )
         .with_for_update(of=OrgMember)
     ).all()
     approved = 0
@@ -177,6 +203,9 @@ def list_orgs_payload(db: Session, user: User) -> dict:
 
 
 def join_requests_payload(db: Session, org_id: str, status: str) -> dict:
+    """Admin view. `roster_match` ("email" | "name" | null) says how each user matches the org's
+    uploaded roster, so admins can spot a name-only match, which is never auto-approved."""
+    roster = roster_matcher(db, org_id)
     rows = db.exec(
         select(OrgMember, User)
         .join(User, User.id == OrgMember.user_id)
@@ -192,6 +221,7 @@ def join_requests_payload(db: Session, org_id: str, status: str) -> dict:
                 "email": u.email,
                 "message": m.message,
                 "requested_at": iso(m.requested_at),
+                "roster_match": roster(u),
             }
             for m, u in rows
         ]

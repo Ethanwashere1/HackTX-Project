@@ -45,7 +45,7 @@ _Status: draft, 2026-10-24, rewritten for the new product spec. Sections 8–9 (
 Joining an org is always a request that must be approved. Each org picks one verification method:
 - `manual`: an admin approves or declines every request.
 - `email_domain`: auto-approved when the user's email domain is in `email_domains`; otherwise the request waits for an admin.
-- `roster`: auto-approved when the user's email or name matches the uploaded member list; otherwise it waits for an admin. A roster row with an email matches only by email; a name-only row matches by name.
+- `roster`: auto-approved only when the user's (Google-verified) email is on the uploaded member list; otherwise it waits for an admin. A name is never enough, since users choose their own display name: a user whose name matches a name-only row (a row without an email) waits, and the join-requests list shows `roster_match: "name"` as a hint for the admin.
 
 Endpoints:
 - **`GET /api/orgs`:** the user's orgs (with `my_role`: `admin | member`, and `my_status`: `pending | approved | declined`) plus discoverable orgs (`discoverable: true`).
@@ -60,8 +60,9 @@ Endpoints:
 ```
   - `email_domains`: max 20, lowercased, a leading `@` is stripped. `email_domain` verification needs at least one domain, and a domain also matches its subdomains (`utexas.edu` matches `cs.utexas.edu`).
 - **`PATCH /api/orgs/{org_id}`** (admin): change `name`, `verification`, `email_domains` or `discoverable`. Omitted or null fields stay unchanged. Pending requests that match after the change are auto-approved.
-- **`POST /api/orgs/{org_id}/join`:** body `{"message": "CS junior"}` (optional). Returns `{"status": "approved" | "pending"}`. Returns 409 `already_member` if already approved. A user may ask again while pending or after a decline.
-- **`GET /api/orgs/{org_id}/join-requests?status=pending`** (admin): `{"requests": [{"user_id": "usr_b2", "name": "Ben Li", "email": "ben@gmail.com", "message": "…", "requested_at": "…"}]}`.
+- **`POST /api/orgs/{org_id}/join`:** body `{"message": "CS junior"}` (optional). Returns `{"status": "approved" | "pending"}`. Returns 409 `already_member` if already approved. A user may ask again while pending or after a decline. A request made again after a decline always returns `pending` and waits for an admin, even on an email-domain or roster match, and a later settings change or roster upload doesn't auto-approve it either.
+- **`GET /api/orgs/{org_id}/join-requests?status=pending`** (admin): `{"requests": [{"user_id": "usr_b2", "name": "Ben Li", "email": "ben@gmail.com", "message": "…", "requested_at": "…", "roster_match": "name"}]}`.
+  - `roster_match`: `"email"` if the user's email is on the org's uploaded roster, `"name"` if only their name matches a roster row without an email (a hint, never auto-approved), else `null`.
 - **`POST /api/orgs/{org_id}/join-requests/{user_id}/approve`** and **`/decline`** (admin): pending requests only, otherwise 409 `request_not_pending`. Returns `{"user_id": "usr_b2", "status": "approved" | "declined"}`.
 - **`PUT /api/orgs/{org_id}/roster`** (admin): `multipart/form-data` with a `file` CSV that has `name` and/or `email` columns (max 1 MiB, 5000 data rows). It replaces the list and returns `{"entries": 312}`. Pending requests that now match are auto-approved. A header-only file clears the roster. Errors are 422 `invalid_roster`. The roster is never returned by the API.
 - **`POST /api/orgs/{org_id}/admins`** (admin): `{"user_id": "usr_b2"}` makes an approved member an admin. Returns `{"user_id": "usr_b2", "role": "admin"}`, or 404 `not_found` if the user isn't an approved member.
