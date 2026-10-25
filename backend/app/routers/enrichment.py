@@ -1,25 +1,29 @@
-"""Public enrichment endpoints backed by SerpAPI (Maps / Events / social / location)."""
+"""Campus-signal enrichment endpoints backed by SerpAPI (Maps / Events / social / location).
 
-from __future__ import annotations
+Signed-in users only: every call can spend SerpAPI searches. Demo fallbacks without a key.
+"""
 
 from fastapi import APIRouter, Query
 
-from app.services import serpapi
+from app.auth.deps import CurrentUser
+from app.services import enrichment as svc
+from app.services.socials import social_preview
 
 router = APIRouter(prefix="/api/enrichment", tags=["enrichment"])
 
 
 @router.get("/context")
-async def enrichment_context(
-    lat: float | None = Query(default=None),
-    lng: float | None = Query(default=None),
-    maps_q: str = Query(default="study spots cafes near UT Austin"),
-    calendar_q: str = Query(default="events near UT Austin HackTX"),
-    social_kind: str = Query(default="github"),
-    social_handle: str = Query(default="mayachen"),
+def enrichment_context(
+    user: CurrentUser,
+    lat: float | None = Query(default=None, ge=-90, le=90),
+    lng: float | None = Query(default=None, ge=-180, le=180),
+    maps_q: str = Query(default="study spots cafes near UT Austin", max_length=200),
+    calendar_q: str = Query(default="events near UT Austin HackTX", max_length=200),
+    social_kind: str = Query(default="github", max_length=20),
+    social_handle: str = Query(default="mayachen", max_length=200),
 ):
     """Bundle Google Maps + Events + social lookup using the caller's location when provided."""
-    return await serpapi.enrichment_bundle(
+    return svc.enrichment_bundle(
         lat=lat,
         lng=lng,
         maps_query=maps_q,
@@ -30,22 +34,26 @@ async def enrichment_context(
 
 
 @router.get("/maps")
-async def enrichment_maps(
-    q: str = Query(default="cafes near UT Austin"),
-    lat: float | None = None,
-    lng: float | None = None,
+def enrichment_maps(
+    user: CurrentUser,
+    q: str = Query(default="cafes near UT Austin", max_length=200),
+    lat: float | None = Query(default=None, ge=-90, le=90),
+    lng: float | None = Query(default=None, ge=-180, le=180),
 ):
-    return await serpapi.search_maps(q, lat=lat, lng=lng)
+    return svc.search_maps(q, lat=lat, lng=lng)
 
 
 @router.get("/calendar")
-async def enrichment_calendar(q: str = Query(default="events near UT Austin")):
-    return await serpapi.search_calendar_events(q)
+def enrichment_calendar(
+    user: CurrentUser, q: str = Query(default="events near UT Austin", max_length=200)
+):
+    return svc.search_calendar_events(q)
 
 
 @router.get("/social")
-async def enrichment_social(
-    kind: str = Query(default="github"),
-    handle: str = Query(default="mayachen"),
+def enrichment_social(
+    user: CurrentUser,
+    kind: str = Query(default="github", max_length=20),
+    handle: str = Query(default="mayachen", max_length=200),
 ):
-    return await serpapi.lookup_social(kind, handle)
+    return social_preview(kind, handle)

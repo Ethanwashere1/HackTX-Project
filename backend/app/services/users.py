@@ -96,12 +96,14 @@ def me_payload(db: Session, user: User) -> dict:
 
 def my_profile_payload(db: Session, user: User) -> dict:
     """The GET /api/me/profile body: the user's own shared profile. Leaves out the SerpAPI
-    `social_notes` and the interview transcript. `interviewed` is true once a summary is saved."""
+    `social_notes` and the interview transcript. `overview` is the AI blurb (null until generated);
+    `interviewed` is true once a summary is saved."""
     profile = db.exec(select(Profile).where(Profile.user_id == user.id)).first()
     return {
         "user_id": user.id,
         "name": user.name,
         "email": user.email,
+        "overview": profile.overview if profile else None,
         "summary": profile.summary if profile else None,
         "traits": (profile.traits or None) if profile else None,
         "socials": [

@@ -6,6 +6,10 @@ or when SerpAPI fails, and the handles stay on the profile as entered either way
 per (kind, handle) in social_lookups for SOCIAL_LOOKUP_TTL_HOURS; a failed call is retried after
 FAILED_RETRY instead and never overwrites an earlier good result. Search results are untrusted web
 text (they reach Gemini prompts via profile_text), so the notes are short plain text.
+
+This module is also the backend's single SerpAPI HTTP path: serpapi_search() serves the profile
+lookup here, the social preview (social_preview) and the maps/events enrichment
+(app.services.enrichment).
 """
 
 import html
@@ -133,11 +137,11 @@ def distill(kind: str, handle: str, data: dict[str, Any]) -> str | None:
     return clean_text(f"{LABELS[kind]}: " + " / ".join(pieces), MAX_HANDLE_NOTES_CHARS)
 
 
-def search_handle(client: httpx.Client, api_key: str, kind: str, handle: str) -> str | None:
-    """Notes for one handle, or None when nothing usable was found. Raises SerpApiError."""
-    params = {"engine": "google", "q": f'site:{SITES[kind]} "{handle}"', "num": 5, "api_key": api_key}
+def serpapi_search(client: httpx.Client, api_key: str, params: dict[str, Any]) -> dict[str, Any]:
+    """One SerpAPI search: the response JSON. Raises SerpApiError on any failure ("no results" is
+    not a failure)."""
     try:
-        resp = client.get(SERPAPI_URL, params=params)
+        resp = client.get(SERPAPI_URL, params={**params, "api_key": api_key})
     except httpx.HTTPError as exc:  # its message can carry the URL (and key), so keep only the type
         raise SerpApiError(type(exc).__name__) from None
     try:
@@ -149,7 +153,70 @@ def search_handle(client: httpx.Client, api_key: str, kind: str, handle: str) ->
     error = str(data.get("error") or "")
     if resp.status_code != 200 or (error and NO_RESULTS_ERROR not in error):
         raise SerpApiError(f"HTTP {resp.status_code}: {clean_text(error, 120)}")
-    return distill(kind, handle, data)
+    return data
+
+
+def _handle_query(kind: str, handle: str) -> dict[str, Any]:
+    return {"engine": "google", "q": f'site:{SITES[kind]} "{handle}"', "num": 5}
+
+
+def search_handle(client: httpx.Client, api_key: str, kind: str, handle: str) -> str | None:
+    """Notes for one handle, or None when nothing usable was found. Raises SerpApiError."""
+    return distill(kind, handle, serpapi_search(client, api_key, _handle_query(kind, handle)))
+
+
+def _demo_social(kind: str, handle: str) -> dict[str, Any]:
+    name = handle.lstrip("@")
+    return {
+        "kind": kind,
+        "handle": handle,
+        "display_name": name,
+        "bio": "Builder · UT Austin · open to HackTX squads",
+        "profile_url": f"https://{SITES.get(kind, kind + '.com')}/{name}",
+        "notes": "Public profile signals: React, campus tools, climate apps.",
+    }
+
+
+def social_preview(kind: str, handle: str) -> dict[str, Any]:
+    """GET /api/enrichment/social: the public profile page SerpAPI finds for a handle,
+    {"source", "engine": "google", "result": {kind, handle, display_name, bio, profile_url, notes}}.
+    Uses the same site-restricted query as the profile lookup. Unsearchable kinds, a missing
+    SERPAPI_API_KEY or a failed call return demo data with source "demo_fallback"."""
+    settings = get_settings()
+    normalized = normalize_handle(kind, handle)
+    fallback = {"source": "demo_fallback", "engine": "google", "result": _demo_social(kind, handle)}
+    if normalized is None or not settings.serpapi_configured:
+        return fallback
+    try:
+        with httpx.Client(timeout=settings.serpapi_timeout_s) as client:
+            data = serpapi_search(client, settings.serpapi_api_key, _handle_query(kind, normalized))
+    except SerpApiError as exc:
+        log.warning("SerpAPI social preview failed: %s", exc)
+        return fallback
+    page: dict[str, Any] = {}
+    for item in data.get("organic_results") or []:
+        if not isinstance(item, dict):
+            continue
+        link = urlsplit(str(item.get("link") or ""))
+        host = (link.hostname or "").lower()
+        if (host == SITES[kind] or host.endswith("." + SITES[kind])) and (
+            _profile_segment(kind, link.path).lower() == normalized
+        ):
+            page = item
+            break
+    snippet = clean_text(page.get("snippet"), 300) or None
+    return {
+        "source": "serpapi",
+        "engine": "google",
+        "result": {
+            "kind": kind,
+            "handle": handle,
+            "display_name": clean_text(page.get("title"), 120) or normalized,
+            "bio": snippet or "",
+            "profile_url": page.get("link"),
+            "notes": snippet,
+        },
+    }
 
 
 def _is_fresh(row: SocialLookup | None, ttl: timedelta) -> bool:

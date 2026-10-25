@@ -6,7 +6,7 @@ from sqlmodel import select
 from app.config import get_settings
 from app.models import EventMember, Profile
 from app.services import profiles as profile_svc
-from tests.test_events import create, good_join, informal, structured
+from tests.test_events import create, good_join, informal, other_host, structured
 from tests.test_review_fixes import make_settings
 
 
@@ -83,7 +83,7 @@ def test_failing_hooks_never_fail_the_join(login_as, db, monkeypatch):
     monkeypatch.setattr(profile_svc, "schedule_social_lookup", boom)
     monkeypatch.setattr(profile_svc, "schedule_overview_refresh", boom)
     c = login_as()
-    event_id = create(c, structured())
+    event_id = create(other_host(login_as), structured())
     assert c.post(f"/api/events/{event_id}/join", json=good_join(c, event_id)).status_code == 201
     assert db.exec(select(EventMember)).one().profile_text
 
@@ -130,7 +130,7 @@ def test_get_or_create_profile_is_idempotent(login_as, db):
 
 def test_build_member_text_is_deterministic(login_as, db):
     c = login_as()
-    event_id = create(c, structured())
+    event_id = create(other_host(login_as), structured())
     c.post(f"/api/events/{event_id}/join", json=good_join(c, event_id))
     from app.models import Event
     from app.services.events import event_questions

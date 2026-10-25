@@ -15,7 +15,7 @@ from app.models import EventMember, InterviewToken, OrgMember, Profile
 from app.models.base import utcnow
 from app.services import interviews as interview_svc
 from app.services import profiles as profile_svc
-from tests.test_events import create, good_join, informal, make_org, structured
+from tests.test_events import create, good_join, informal, make_org, other_host, structured
 from tests.test_health_errors import assert_error
 
 KEY = {"X-Internal-Key": "test-internal-key"}  # conftest sets INTERNAL_API_KEY to this
@@ -184,12 +184,12 @@ def test_concurrent_config_calls_claim_once(interview, monkeypatch):
 
 
 def test_member_who_lost_org_access_is_403(client, login_as, db):
-    ana = login_as()
-    org_id = make_org(db, {ana.user["user_id"]: "approved"})
-    event_id = create(ana, structured(org_id=org_id))
+    host, ana = other_host(login_as), login_as()
+    org_id = make_org(db, {ana.user["user_id"]: "approved", host.user["user_id"]: "approved"})
+    event_id = create(host, structured(org_id=org_id))
     ana.post(f"/api/events/{event_id}/join", json=good_join(ana, event_id))
     token = ana.post(f"/api/events/{event_id}/interview").json()["interview_token"]
-    om = db.exec(select(OrgMember)).one()
+    om = db.exec(select(OrgMember).where(OrgMember.user_id == ana.user["user_id"])).one()
     om.status = "declined"
     db.add(om)
     db.commit()
@@ -198,6 +198,16 @@ def test_member_who_lost_org_access_is_403(client, login_as, db):
 
 
 # --- happy path ----------------------------------------------------------------------------------
+
+def test_summary_schedules_the_overview_refresh(client, interview, text_changed, monkeypatch):
+    ana, event_id, token = interview
+    calls = []
+    monkeypatch.setattr(profile_svc, "schedule_overview_refresh",
+                        lambda uid, event_id=None: calls.append((uid, event_id)))
+    assert config(client, token).status_code == 200
+    assert post_summary(client, token).status_code == 200
+    assert calls == [(ana.user["user_id"], event_id)]
+
 
 def test_config_returns_the_contract_shape(client, interview, db):
     ana, event_id, token = interview
@@ -227,10 +237,10 @@ def test_config_returns_the_contract_shape(client, interview, db):
     assert row.used_at is not None and timedelta(0) <= utcnow() - row.used_at < timedelta(minutes=1)
 
 
-def test_summary_updates_profile_and_every_event_text(client, interview, db, text_changed):
+def test_summary_updates_profile_and_every_event_text(client, interview, db, text_changed, login_as):
     ana, event_id, token = interview
     uid = ana.user["user_id"]
-    other = create(ana, informal())  # a second event Ana is also in
+    other = create(other_host(login_as), informal())  # a second event Ana is also in
     assert ana.post(f"/api/events/{other}/join", json={}).status_code == 201
     text_changed.clear()
 

@@ -67,7 +67,7 @@ def interview_config(interview_token: str, db: DbSession):
 def interview_summary(
     interview_token: str, body: SummaryBody, db: DbSession, background: BackgroundTasks
 ):
-    member_ids = svc.save_summary(
+    user_id, event_id, member_ids = svc.save_summary(
         db,
         interview_token,
         summary=body.summary,
@@ -77,4 +77,8 @@ def interview_summary(
     )
     # Re-embed after the response, like a join; failures are logged and never affect the save.
     background.add_task(profile_svc.run_hook, profile_svc.on_member_text_changed, member_ids)
+    # Then regenerate the AI overview from the new summary (re-embeds again on success).
+    background.add_task(
+        profile_svc.run_hook, profile_svc.on_interview_summary_saved, user_id, event_id
+    )
     return {"ok": True}

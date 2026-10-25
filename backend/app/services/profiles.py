@@ -207,7 +207,9 @@ def overview_request_body(
         "user": {"user_id": user.id, "name": user.name},
         "answers": dict(member.answers) if member and member.answers else {},
         "fields": dict(member.fields) if member and member.fields else {},
-        "social_notes": profile.social_notes,
+        # Withheld: the overview is shown on other people's recommendation cards and sent to the
+        # agents as candidate text, where SerpAPI social info must not reach (contract section 4).
+        "social_notes": None,
         "interview_summary": profile.summary,
         "interview_traits": dict(profile.traits) if profile.traits else {},
     }
@@ -233,18 +235,20 @@ def apply_overview_result(profile: Profile, result: dict[str, Any]) -> None:
 def regenerate_overview(db: Session, user_id: str, *, event_id: str | None = None) -> bool:
     """Call agents /profile-overview, persist on success, refresh member texts. Returns True if saved.
 
-    Opens no sessions of its own; caller provides `db`. Failures leave the prior overview alone.
+    Opens no sessions of its own; caller provides `db`. No transaction or row lock is held during
+    the agents call. Failures leave the prior overview alone.
     """
-    from app.services import agents as agents_client
+    from app.services import agents_client
 
     user = db.get(User, user_id)
     if user is None:
         return False
-    profile = get_or_create_profile(db, user_id, lock=True)
-    body = overview_request_body(db, user, profile, event_id=event_id)
+    body = overview_request_body(db, user, get_or_create_profile(db, user_id), event_id=event_id)
+    db.commit()  # release the connection before the network call
     result = agents_client.fetch_profile_overview(body)
     if result is None:
         return False
+    profile = get_or_create_profile(db, user_id, lock=True)
     apply_overview_result(profile, result)
     db.add(profile)
     db.commit()
@@ -271,13 +275,9 @@ def schedule_overview_refresh(user_id: str, event_id: str | None = None) -> None
 
 
 def on_interview_summary_saved(user_id: str, event_id: str | None = None) -> None:
-    """Call after interview summary/traits are committed: regenerate overview + re-embed."""
+    """Background hook after interview summary/traits are committed: regenerate the overview,
+    which re-embeds on success."""
     schedule_overview_refresh(user_id, event_id)
-
-
-def on_social_notes_updated(user_id: str) -> None:
-    """Call after SerpAPI (or similar) writes profiles.social_notes: regenerate overview + re-embed."""
-    schedule_overview_refresh(user_id)
 
 
 def run_hook(hook: Callable[..., None], *args: Any) -> None:

@@ -199,7 +199,7 @@ def test_open_groups_are_scored_by_member_similarity(ranked):
         "group_id": group_id, "name": group["name"], "size": 2, "max_size": 4,
         "score": expected, "reason": None,
     }
-    assert group["name"].startswith("Team ")
+    assert group["name"].startswith("Squad ")
     # Cara and Dan are at max_groups_per_user (1): reachable through their group, not as people.
     assert people_ids(body) == [uid(u["ben"]), uid(u["eve"])]
 
@@ -384,7 +384,13 @@ def test_agents_rerank(ranked, monkeypatch):
     assert [(c["candidate_type"], c["id"]) for c in sent["candidates"]] == [
         ("user", uid(u["ben"])), ("user", uid(u["eve"])), ("group", group_id),
     ]
-    assert all(set(c) == {"candidate_type", "id", "profile_text", "similarity"} for c in sent["candidates"])
+    # No one has traits here: people carry no signals, and a group always sends empty ones.
+    base = {"candidate_type", "id", "profile_text", "similarity"}
+    assert [set(c) for c in sent["candidates"]] == [base, base, base | {"traits", "topic_signals", "group_need"}]
+    assert sent["candidates"][-1] | {"profile_text": ""} == {
+        "candidate_type": "group", "id": group_id, "profile_text": "",
+        "similarity": sent["candidates"][-1]["similarity"], "traits": {}, "topic_signals": [], "group_need": None,
+    }
     assert sent["candidates"][0]["similarity"] == round(cos(v["ana"], v["ben"]), 4)
     assert "Member Cara:" in sent["candidates"][-1]["profile_text"]
 

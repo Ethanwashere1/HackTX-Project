@@ -127,7 +127,7 @@ def test_send_to_group_includes_all_current_members(people, db):
         inc = [r for r in member.get("/api/requests?box=incoming").json()["requests"]
                if r["status"] == "pending"]
         assert [r["request_id"] for r in inc] == [body["request_id"]]
-        assert inc[0]["target"]["group_id"] == gid and inc[0]["target"]["name"].startswith("Team ")
+        assert inc[0]["target"]["group_id"] == gid and inc[0]["target"]["name"].startswith("Squad ")
     assert dan.get("/api/requests?box=incoming").json()["requests"] == []
 
 
@@ -203,7 +203,7 @@ def test_accept_user_to_user_forms_a_group(people, db):
     assert body["group_id"].startswith("grp_") and body["connection_id"] is None
 
     group = db.get(Group, body["group_id"])
-    assert group.event_id == e and group.name.startswith("Team ") and len(group.name.split()) == 3
+    assert group.event_id == e and group.name.startswith("Squad ") and len(group.name.split()) == 3
     assert members(db, group.id) == {uid(ana), uid(ben)}
     assert group.thread_id and group.thread_id != req["thread_id"]
     assert participants(db, group.thread_id) == {uid(ana), uid(ben)}

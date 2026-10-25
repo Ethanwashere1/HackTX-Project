@@ -12,6 +12,9 @@
    embedded members Snowflake lacks, or pgvector alone when Snowflake isn't configured, times out
    or fails. Members without a vector rank last. Groups score their members' mean similarity.
 4. The agents service reranks them with reasons; on any failure the similarity order is used.
+   Besides each profile_text it gets the enriched-matching signals: `traits`, `topic_signals` and
+   `group_need` from the person's profile (a group sends its members' topic_signals).
+   people[].summary is the person's AI overview when present, else the interview summary.
 
 No DB connection is held while waiting on Gemini, Snowflake or the agents service: the request's
 transaction is committed first and everything needed later is read into plain values.
@@ -30,6 +33,7 @@ from app.models import Event, EventMember, Group, GroupMember, Profile, Request,
 from app.models.base import utcnow
 from app.services import agents_client, embeddings, snowflake_store
 from app.services.groups import count_user_groups, user_group_ids
+from app.services.profiles import group_need, topic_signals
 from app.services.requests import Exclusions, excluded_for_viewer
 
 log = logging.getLogger(__name__)
@@ -64,6 +68,7 @@ class _Candidate:
     profile_text: str
     similarity: float | None
     payload: dict[str, Any] = field(default_factory=dict)  # the response fields besides score/reason
+    signals: dict[str, Any] = field(default_factory=dict)  # traits/topic_signals/group_need for /recommend
 
     def sort_key(self, tiebreak: Any) -> tuple:
         return (self.similarity is None, -(self.similarity or 0.0), tiebreak, self.id)
@@ -167,6 +172,33 @@ def similarity_scores(
     return sims
 
 
+def match_signals(traits: dict[str, Any] | None) -> dict[str, Any]:
+    """The optional enriched-matching fields of a /recommend viewer or user candidate. The agents
+    take traits as {str: str}, so other values (an interview's list of highlights) become text."""
+    traits = {
+        str(k): ", ".join(map(str, v)) if isinstance(v, list) else str(v)
+        for k, v in (traits or {}).items() if v is not None
+    }
+    out: dict[str, Any] = {}
+    if traits:
+        out["traits"] = traits
+    topics = topic_signals(traits)
+    if topics:
+        out["topic_signals"] = topics
+    need = group_need(traits)
+    if need is not None:
+        out["group_need"] = need
+    return out
+
+
+def _group_signals(member_traits: list[dict[str, Any] | None]) -> dict[str, Any]:
+    """A group candidate's signals: its members' topic_signals, in order, once each."""
+    topics: list[str] = []
+    for traits in member_traits:
+        topics += [t for t in topic_signals(traits) if t not in topics]
+    return {"traits": {}, "topic_signals": topics, "group_need": None}
+
+
 def _strip_private(text: str) -> str:
     return _PRIVATE_LINES.sub("", text or "").strip()
 
@@ -195,7 +227,10 @@ def _users_at_group_limit(db: Session, s: _Snapshot) -> set[str]:
 
 def _people(db: Session, s: _Snapshot, ex: Exclusions, sims: dict[str, float], pool: int) -> list[_Candidate]:
     rows = db.exec(
-        select(EventMember.user_id, EventMember.profile_text, EventMember.joined_at, User.name, Profile.summary)
+        select(
+            EventMember.user_id, EventMember.profile_text, EventMember.joined_at, User.name,
+            func.coalesce(Profile.overview, Profile.summary), Profile.traits,
+        )
         .join(User, User.id == EventMember.user_id)
         .outerjoin(Profile, Profile.user_id == EventMember.user_id)
         .where(EventMember.event_id == s.event_id, EventMember.user_id.not_in(list(ex.user_ids)))
@@ -206,10 +241,11 @@ def _people(db: Session, s: _Snapshot, ex: Exclusions, sims: dict[str, float], p
                 _Candidate(
                     "user", user_id, _strip_private(text), sims.get(user_id),
                     {"user_id": user_id, "name": name, "summary": summary},
+                    match_signals(traits),
                 ),
                 joined_at,
             )
-            for user_id, text, joined_at, name, summary in rows
+            for user_id, text, joined_at, name, summary, traits in rows
         ),
         key=lambda pair: pair[0].sort_key(pair[1]),
     )
@@ -223,9 +259,11 @@ def _groups(db: Session, s: _Snapshot, ex: Exclusions, sims: dict[str, float], p
     if not groups:
         return []
     members: dict[str, list[tuple[str, str, str]]] = {g.id: [] for g in groups}
-    for group_id, user_id, name, text in db.exec(
-        select(GroupMember.group_id, GroupMember.user_id, User.name, EventMember.profile_text)
+    traits_of: dict[str, list[dict[str, Any] | None]] = {g.id: [] for g in groups}
+    for group_id, user_id, name, text, traits in db.exec(
+        select(GroupMember.group_id, GroupMember.user_id, User.name, EventMember.profile_text, Profile.traits)
         .join(User, User.id == GroupMember.user_id)
+        .outerjoin(Profile, Profile.user_id == GroupMember.user_id)
         .outerjoin(
             EventMember,
             and_(EventMember.event_id == GroupMember.event_id, EventMember.user_id == GroupMember.user_id),
@@ -234,6 +272,7 @@ def _groups(db: Session, s: _Snapshot, ex: Exclusions, sims: dict[str, float], p
         .order_by(GroupMember.joined_at, GroupMember.id)
     ).all():
         members[group_id].append((user_id, name, text or ""))
+        traits_of[group_id].append(traits)
 
     ranked: list[tuple[_Candidate, datetime]] = []
     for g in groups:
@@ -255,6 +294,7 @@ def _groups(db: Session, s: _Snapshot, ex: Exclusions, sims: dict[str, float], p
                 "max_size": s.max_size,
                 "members": [{"user_id": uid, "name": name} for uid, name, _ in group_members],
             },
+            _group_signals(traits_of[g.id]),
         )
         ranked.append((candidate, g.created_at))
     ranked.sort(key=lambda pair: pair[0].sort_key(pair[1]))
@@ -291,15 +331,16 @@ def recommend(db: Session, event: Event, viewer: EventMember, limit: int) -> dic
             groups = _groups(db, s, ex, sims, pool)
     else:
         people = _people(db, s, ex, sims, pool)
+    viewer_traits = db.exec(select(Profile.traits).where(Profile.user_id == s.user_id)).first()
     db.commit()  # done reading; don't hold a connection during the agents call
 
     candidates = people + groups
     picks = agents_client.rerank(
         {"event_id": s.event_id, "type": s.event_type, "tone": s.tone, "description": s.description},
-        {"user_id": s.user_id, "profile_text": s.profile_text},
+        {"user_id": s.user_id, "profile_text": s.profile_text, **match_signals(viewer_traits)},
         [
             {"candidate_type": c.candidate_type, "id": c.id, "profile_text": c.profile_text,
-             "similarity": _score(c.similarity)}
+             "similarity": _score(c.similarity), **c.signals}
             for c in candidates
         ],
         min(50, limit * (bool(people) + bool(groups)) or limit),

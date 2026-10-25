@@ -5,13 +5,13 @@ import json
 import httpx
 from sqlmodel import select
 
-from app.models import Event, Profile
-from app.services import agents as agents_client
+from app.models import Profile
+from app.services import agents_client
 from app.services import profiles as profile_svc
-from app.services import recommend as recommend_svc
 from tests.test_events import create, good_join, structured
 from tests.test_health_errors import assert_error
 from tests.test_profiles import member
+from tests.test_recommendations import FakeAgents, recs, setup_event, use_agents
 from tests.test_requests import form_group, uid
 from tests.test_threads_groups import set_contacts
 
@@ -45,9 +45,10 @@ def test_get_me_profile_empty(login_as):
         "email": "ana@utexas.edu",
         "overview": None,
         "summary": None,
-        "traits": {},
+        "traits": None,
         "contacts": [],
         "socials": [],
+        "interviewed": False,
     }
 
 
@@ -93,6 +94,7 @@ def test_join_persists_overview_when_agents_ok(login_as, db, monkeypatch):
         assert body["answers"]
         assert body["fields"]["skills"] == ["react", "figma"]
         assert body["event"]["type"] == "structured"
+        assert body["social_notes"] is None  # SerpAPI info never feeds the shared overview
         return httpx.Response(200, json={
             "overview": "Frontend-leaning builder focused on climate apps.",
             "traits": {
@@ -267,47 +269,41 @@ def test_question_suggestions_requires_login(client):
     )
 
 
-# --- recommend enrichment helpers ----------------------------------------------------------------
+# --- recommend enrichment ------------------------------------------------------------------------
+# main tested its recommend.py helpers directly; they are folded into services/recommendations.py,
+# so this checks the same payload through GET /recommendations and the agents rerank call.
 
-def test_recommend_payload_includes_traits_and_prefers_overview(login_as, db, monkeypatch):
-    monkeypatch.setattr(profile_svc, "schedule_overview_refresh", lambda *a, **k: None)
-    monkeypatch.setattr(profile_svc, "on_member_text_changed", lambda *a, **k: None)
-    monkeypatch.setattr(profile_svc, "schedule_social_lookup", lambda *a, **k: None)
-
-    host = login_as("host@x.com", "Host")
-    event_id = create(host, structured())
-    ana = login_as()
-    user_id = ana.user["user_id"]
-    ana.post(f"/api/events/{event_id}/join", json=good_join(ana, event_id))
-
-    profile = db.exec(select(Profile).where(Profile.user_id == user_id)).one()
-    profile.overview = "Overview blurb"
-    profile.summary = "Interview only"
-    profile.traits = {
-        "working_style": "pairing",
-        "topics": "climate, react",
-        "group_need": "hackathon teammates",
-    }
+def _set_profile(db, client, **values):
+    profile = db.exec(select(Profile).where(Profile.user_id == uid(client))).one()
+    for k, v in values.items():
+        setattr(profile, k, v)
     db.add(profile)
     db.commit()
 
-    event = db.get(Event, event_id)
-    viewer = recommend_svc.enrich_viewer(db, event, user_id)
+
+def test_recommend_payload_includes_traits_and_prefers_overview(login_as, db, monkeypatch):
+    event_id, u = setup_event(login_as, ["ana", "ben"])
+    _set_profile(db, u["ana"], traits={"working_style": "pairing", "topics": "climate, react",
+                                       "group_need": "hackathon teammates"})
+    _set_profile(db, u["ben"], overview="Overview blurb", summary="Interview only",
+                 traits={"topics": "climate,apis", "highlights": ["won a hackathon"]})
+    agents = use_agents(monkeypatch, FakeAgents(results=lambda body: [
+        {"candidate_type": "user", "id": uid(u["ben"]), "score": 0.9, "reason": "overlap"}]))
+
+    body = recs(u["ana"], event_id)
+    sent = agents.calls[0]["json"]
+    viewer = sent["viewer"]
     assert viewer["traits"]["working_style"] == "pairing"
     assert viewer["topic_signals"] == ["climate", "react"]
     assert viewer["group_need"] == "hackathon teammates"
+    (cand,) = sent["candidates"]
+    assert cand["candidate_type"] == "user" and cand["id"] == uid(u["ben"])
+    assert cand["topic_signals"] == ["climate", "apis"] and "group_need" not in cand
+    assert cand["traits"]["highlights"] == "won a hackathon"  # agents take {str: str}
+    assert body["people"][0]["summary"] == "Overview blurb"
 
-    cand = recommend_svc.enrich_user_candidate(db, event_id, user_id, similarity=0.8)
-    assert cand["candidate_type"] == "user" and cand["similarity"] == 0.8
-    assert cand["topic_signals"] == ["climate", "react"]
-
-    card = recommend_svc.people_card(db, user_id, score=0.9, reason="overlap")
-    assert card["summary"] == "Overview blurb"
-
-    profile.overview = None
-    db.add(profile)
-    db.commit()
-    assert recommend_svc.person_summary(db, user_id) == "Interview only"
+    _set_profile(db, u["ben"], overview=None)
+    assert recs(u["ana"], event_id)["people"][0]["summary"] == "Interview only"
 
 
 def test_team_page_prefers_overview_over_summary(login_as, db, monkeypatch):

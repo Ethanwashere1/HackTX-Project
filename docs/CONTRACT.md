@@ -32,28 +32,21 @@ _Status: draft, 2026-10-25, rewritten for the new product spec. Sections 8–9 (
  "orgs": [{"org_id": "org_ut", "name": "UT Austin"}],
  "contacts": [{"kind": "discord", "value": "ana#1234"}]}
 ```
-- **`GET /api/me/profile`:** the user's own shared profile, for their profile page. `summary` and `traits` are null until an interview summary is saved; `interviewed` is true once one is. The SerpAPI `social_notes` and the interview transcript are never returned.
-```json
-{"user_id": "usr_a1", "name": "Ana Ruiz", "email": "ana@utexas.edu",
- "summary": "Frontend dev who loves climate apps", "traits": {"ambition": "win"},
- "socials": [{"kind": "github", "value": "ana-ruiz"}],
- "contacts": [{"kind": "discord", "value": "ana#1234"}], "interviewed": true}
-```
-- **`PUT /api/me/contacts`:** body `{"contacts": [{"kind": "phone", "value": "+1…"}]}` (max 20, replaces the whole list). Returns 200 `{"contacts": [...]}`. Contacts are visible only to the user's group-mates and connections.
-- **`GET /api/me/profile`:** the signed-in user's shared profile (one per person across events).
+- **`GET /api/me/profile`:** the signed-in user's own shared profile (one per person across events), for their profile page. The SerpAPI `social_notes` and the interview transcript are never returned.
 ```json
 {"user_id": "usr_a1", "name": "Ana Ruiz", "email": "ana@utexas.edu",
  "overview": "Frontend-leaning builder who wants a climate hack with a chill but ambitious team.",
  "summary": "Loves climate apps; prefers pairing; available all weekend.",
  "traits": {"working_style": "pairing", "ambition": "win", "topics": "climate,react",
             "group_need": "hackathon teammates"},
- "contacts": [{"kind": "discord", "value": "ana#1234"}],
- "socials": [{"kind": "github", "value": "ana-ruiz"}]}
+ "socials": [{"kind": "github", "value": "ana-ruiz"}],
+ "contacts": [{"kind": "discord", "value": "ana#1234"}], "interviewed": true}
 ```
-  - `overview` is the AI-generated blurb from questionnaire answers + social notes + interview (null until generated).
-  - `summary` is the interview-only summary (null if the user skipped the interview).
-  - `traits` merges interview traits with overview traits (topics, group_need, working style, etc.).
+  - `overview` is the AI-generated blurb from questionnaire answers + interview (null until generated). The SerpAPI `social_notes` are not used for it, because recommendation cards show it to people who aren't connected yet.
+  - `summary` is the interview-only summary (null if the user skipped the interview); `interviewed` is true once one is saved.
+  - `traits` merges interview traits with overview traits (topics, group_need, working style, etc.); null when empty.
   - Recommendations and team pages prefer `overview` when present, else `summary`.
+- **`PUT /api/me/contacts`:** body `{"contacts": [{"kind": "phone", "value": "+1…"}]}` (max 20, replaces the whole list). Returns 200 `{"contacts": [...]}`. Contacts are visible only to the user's group-mates and connections.
 - **Login errors:**
   - `/login` returns 503 `oauth_not_configured` while the Google credentials are unset.
   - On the callback, a missing, expired (10 min) or mismatched `state` returns 400 `invalid_oauth_state`; a missing `code` returns 400 `bad_request`; a Google token or profile failure (including a non-JSON response) returns 502 `oauth_failed`; an unverified Google email returns 403 `email_not_verified`.
@@ -95,6 +88,26 @@ Endpoints:
 ```
   - "Upcoming" means `starts_at` is null, in the future, or within the last 12 hours. Ordered by `starts_at`, nulls last; max 100 events.
   - Open proposal (PLAN.md Open Questions): return the auto-approved count from `PUT /roster`.
+
+**Campus signals** (signed-in users; shown beside the org feed). SerpAPI-backed, with demo data when `SERPAPI_API_KEY` is unset or a search fails (`source: "demo_fallback"`). Maps and events answers are cached for 10 minutes.
+- **`GET /api/enrichment/context?lat=&lng=&maps_q=&calendar_q=&social_kind=&social_handle=`** (all optional; `lat`/`lng` from browser geolocation):
+```json
+{"location": {"lat": 30.2849, "lng": -97.7341, "label": "Browser geolocation",
+              "fallback_lat": 30.2849, "fallback_lng": -97.7341},
+ "maps": {"source": "serpapi", "engine": "google_maps",
+          "results": [{"title": "PCL", "address": "101 E 21st St, Austin, TX", "rating": 4.6,
+                       "type": "library", "maps_url": "https://maps.google.com/?q=30.28,-97.73"}]},
+ "calendar": {"source": "serpapi", "engine": "google_events",
+              "results": [{"title": "HackTX Opening Ceremony", "date": "Sat, Oct 25 · 10:00 AM",
+                           "venue": "GDC Auditorium", "link": "https://hacktx.com"}]},
+ "social": {"source": "serpapi", "engine": "google",
+            "result": {"kind": "github", "handle": "mayachen", "display_name": "Maya Chen",
+                       "bio": "…", "profile_url": "https://github.com/mayachen", "notes": "…"}},
+ "serpapi_configured": true}
+```
+- **`GET /api/enrichment/maps?q=&lat=&lng=`**, **`GET /api/enrichment/calendar?q=`** and **`GET /api/enrichment/social?kind=&handle=`** return the `maps`, `calendar` and `social` objects above on their own.
+- Demo results may carry an extra `near`/`query` key. `label` is `"Default · UT Austin campus"` without `lat`. The social preview searches the handle's profile site (github, linkedin, instagram, facebook); other kinds get demo data.
+- Text query params are at most 200 characters; `lat` is −90…90 and `lng` −180…180 (else 422 `validation_error`). 401 `unauthenticated` when signed out.
 
 ## 3. Events
 **`POST /api/events`** (host)
@@ -145,7 +158,8 @@ Endpoints:
   - `fields` may only contain the event's `required_fields`, and each must be non-empty: a string (max 500), number, boolean, or list of strings (max 50).
 - `socials` use the contact `kind` enum (max 10); an unknown kind is 422 `validation_error`.
 - Returns 409 `already_joined` if the user already joined.
-- Joining stores the answers and creates or updates the user's profile, which is shared across events. `profile_status` is `ready` once the profile text is saved (the embedding follows asynchronously).
+- Returns 403 `is_host` for the event's host: hosts manage the event and can't join it as a participant.
+- Joining stores the answers and creates or updates the user's profile, which is shared across events. `profile_status` is `ready` once the profile text is saved (the embedding follows asynchronously). The profile `overview` is regenerated in the background (section 8) and never affects the join.
 - SerpAPI lookup runs asynchronously and never blocks the join. Its result (`social_notes`) is untrusted text that reaches the agents via `profile_text` and the interview config (section 8).
 
 **`POST /api/events/{event_id}/interview`** starts the optional interview:
@@ -187,6 +201,7 @@ Endpoints:
 - **Field values:**
   - `ranked_by` is `gemini`, or `similarity` when the agent rerank fails, in which case `reason` is null. It is also `similarity` when there are no candidates. With `ranked_by: "gemini"`, a list the agent returned nothing for is filled in similarity order with `reason: null`. Reasons are at most 300 characters.
   - In similarity mode, `score` is the cosine similarity rounded to 4 decimal places; a group member without a vector counts as 0.0.
+  - `people[].summary` is the candidate's `overview` when present, else their interview `summary`.
   - `groups` is always `[]` for informal events.
   - `limit` is 1–50. Each candidate type (`people`, `groups`) returns at most `limit` entries. The `limit` sent to the agents' `/recommend` is `limit` × the number of candidate types present, capped at 50.
 - **Excluded from results:** the viewer, people already in the viewer's groups, groups the viewer is in, full groups, users or groups the viewer declined or was declined by, and users or groups with a pending request to or from the viewer (or the viewer's groups).
@@ -195,6 +210,7 @@ Endpoints:
   - `people` is `[]` once the event has `group_count` groups, or when `max_size` is below 2.
   - When the viewer has reached `max_groups_per_user`, both `people` and `groups` are `[]`, since either accept would fail with `group_limit_per_user`.
 - The Socials line (handles) and the Public info line (SerpAPI notes) are stripped from each candidate's `profile_text`, including group members' texts, before it is sent to the agents.
+- **Matching signals:** each `profile_text` holds the questionnaire answers and fields, social notes (the viewer's own only, per the line above), the AI `overview`, and the interview summary and traits. Snowflake/pgvector rank by embedding similarity; the agents' `/recommend` then reranks using those texts plus `traits` / `topic_signals` / `group_need` from each person's profile (section 8).
 
 ## 5. Requests and consent
 **`POST /api/requests`**
@@ -263,11 +279,14 @@ Each group has its own thread (`group.thread_id`). Clients poll about every 2 s.
 ## 7. Groups and connections
 **`GET /api/groups/{group_id}`** (team page)
 ```json
-{"group_id": "grp_4", "event_id": "evt_h1", "name": "Team Nebula", "thread_id": "thr_g4",
+{"group_id": "grp_4", "event_id": "evt_h1", "name": "Squad Nebula", "thread_id": "thr_g4",
+ "owner_user_id": "usr_a1",
  "members": [{"user_id": "usr_a1", "name": "Ana Ruiz", "summary": "…",
               "contacts": [{"kind": "discord", "value": "ana#1234"}]}]}
 ```
 Non-members get 403. Contacts are never returned to non-members anywhere in the API.
+- `owner_user_id` is the earliest member (null if the group is empty). `members[].summary` is the member's `overview` when present, else their interview `summary`. New groups are named `Squad <Adjective> <Noun>`.
+- A request to a group the sender is already in is 409 `already_in_group`.
 
 - **`PATCH /api/groups/{group_id}`:** members can rename the group with `{"name": "…"}`.
 - **`POST /api/groups/{group_id}/leave`:** leaves the group.
@@ -310,9 +329,47 @@ The agents service calls this when the WebSocket opens. It returns 401 if the to
  "input_mode": "voice"}
 // 200 → {"ok": true}
 ```
-The backend stores the transcript and summary on the user's profile, then re-embeds the user's event profiles.
+The backend stores the transcript and interview `summary`/`traits` on the user's profile, re-embeds the user's event profiles, then asynchronously regenerates the profile `overview` via `POST /profile-overview` (which re-embeds again on success).
 - **Limits** (else 422 `validation_error`): `transcript` ≤ 1000 entries, each `text` ≤ 5000 chars; `summary` non-empty, ≤ 5000 chars; `traits` any JSON object, ≤ 10k chars serialized; `input_mode` is `voice`, `text` or absent.
 - **Open question for the Gemini dev:** the example above shows flat `traits`, but `agents/interview.py` sends `{"highlights": [...]}`. Both pass validation today; which shape is canonical? (PLAN.md Open Questions.)
+
+### Backend → agents: POST /profile-overview
+Builds a short profile overview from the questionnaire and interview. Called in the background after a join and after an interview summary (never on the recommendations request path).
+```json
+// request
+{"user": {"user_id": "usr_a1", "name": "Ana"},
+ "answers": {"q_1": "frontend", "q_2": "climate apps"},
+ "fields": {"skills": ["react", "figma"], "experience_level": "intermediate"},
+ "social_notes": null,
+ "interview_summary": "Loves climate apps; prefers pairing; available all weekend.",
+ "interview_traits": {"working_style": "pairing", "ambition": "win", "availability": "all weekend"},
+ "event": {"event_id": "evt_h1", "name": "HackTX team-up", "type": "structured", "tone": "casual"}}
+// 200
+{"overview": "Frontend-leaning builder focused on climate apps; wants a pairing-friendly hackathon team for the weekend.",
+ "traits": {"working_style": "pairing", "ambition": "win", "availability": "all weekend",
+            "topics": "climate,react,figma", "group_need": "hackathon teammates"}}
+```
+- `answers`/`fields` are from the event just joined (or interviewed for), else the user's latest membership; `event` is that event, optional context. The overview is stored on the shared user profile.
+- `social_notes` is always null from the backend: the overview is shown on recommendation cards and sent to the agents as candidate text, where SerpAPI info must not reach (section 4).
+- The backend stores `overview` (one line, at most 1000 characters) and merges the returned `traits` onto the profile's traits.
+- Timeout 15 s. On failure the backend keeps the previous overview (or leaves it null); join and interview still succeed.
+- Errors: 401 `unauthenticated`, 422 `validation_error`, 502 `overview_failed`, 503 `gemini_not_configured`.
+
+### Backend → agents: POST /generate-questions
+AI assist for the host questionnaire builder. Proxied by `POST /api/question-suggestions`.
+```json
+// request
+{"event": {"name": "HackTX team-up", "type": "structured", "tone": "casual", "description": "…"},
+ "existing_questions": [{"text": "What role do you want?", "kind": "single_choice",
+                         "options": ["frontend", "backend", "design", "ml"], "required": false}],
+ "count": 3, "hint": "availability and what they want to build"}
+// 200
+{"questions": [{"text": "How many hours can you commit this weekend?", "kind": "single_choice",
+                "options": ["under 8", "8–16", "all weekend"], "required": true},
+               {"text": "What do you want to build?", "kind": "text", "options": null, "required": false}]}
+```
+- Must not duplicate `existing_questions` text. Prefer kinds that fit the event tone. The backend drops returned questions with an unknown `kind` or a choice kind without options.
+- Timeout 10 s. Errors: 401 `unauthenticated`, 422 `validation_error`, 502 `quizgen_failed`, 503 `gemini_not_configured`.
 
 ### Backend → agents: POST /recommend
 ```json
@@ -331,7 +388,7 @@ The backend stores the transcript and summary on the user's profile, then re-emb
 {"results": [{"candidate_type": "user", "id": "usr_b2", "score": 0.87, "reason": "…"}]}
 ```
 - The response may only contain IDs from `candidates`.
-- `traits`, `topic_signals`, and `group_need` are optional but preferred. The Recommender must weigh: overlapping topics / prior similar interests, complementary skills, shared `group_need`, and traits that suggest they work well together (working style, ambition, availability) — not only raw text similarity.
+- `traits` ({str: str}; the backend turns list values into comma-separated text), `topic_signals` (from `traits.topics`) and `group_need` (from `traits.group_need`) are sent for a person only when present; a group always sends `traits: {}`, its members' `topic_signals`, and `group_need: null`. They are optional but preferred. The Recommender must weigh: overlapping topics / prior similar interests, complementary skills, shared `group_need`, and traits that suggest they work well together (working style, ambition, availability) — not only raw text similarity.
 - Timeout is 20 s. On error, timeout or an invalid response, the backend returns the similarity order with `ranked_by: "similarity"`.
 
 ### GET /health (both services)
@@ -372,8 +429,9 @@ The browser never talks to Gemini directly, and the backend never handles audio.
 ---
 
 ## Error codes
-`unauthenticated` (401), `forbidden` (403), `not_org_member` (403), `not_org_admin` (403), `not_found` (404), `validation_error` (422), `invalid_answers` (422), `invalid_roster` (422), `already_joined` (409), `already_member` (409), `already_in_group` (409), `already_connected` (409), `duplicate_request` (409), `group_full` (409), `group_limit_reached` (409), `group_limit_per_user` (409), `request_not_pending` (409), `interview_disabled` (409), `internal_error` (500).
-Auth and generic: `bad_request` (400), `invalid_oauth_state` (400), `email_not_verified` (403), `method_not_allowed` (405), `account_conflict` (409), `oauth_failed` (502), `oauth_not_configured` (503).
+`unauthenticated` (401), `forbidden` (403), `is_host` (403), `not_org_member` (403), `not_org_admin` (403), `not_found` (404), `validation_error` (422), `invalid_answers` (422), `invalid_roster` (422), `already_joined` (409), `already_member` (409), `already_in_group` (409), `already_connected` (409), `duplicate_request` (409), `group_full` (409), `group_limit_reached` (409), `group_limit_per_user` (409), `request_not_pending` (409), `interview_disabled` (409), `internal_error` (500).
+Auth and generic: `bad_request` (400), `invalid_oauth_state` (400), `email_not_verified` (403), `method_not_allowed` (405), `account_conflict` (409), `oauth_failed` (502), `agents_unavailable` (502), `oauth_not_configured` (503).
+Agents-only (returned by the agents service to the backend): `overview_failed` (502), `quizgen_failed` (502), `recommender_failed` (502), `gemini_not_configured` (503).
 
 ## Changelog
 - v1.0-pre (2026-10-24): full rewrite for the new product spec (OAuth accounts, orgs and feed, structured and informal events, recommendations with mutual consent, chat and calls, team pages). Replaces v0.2, which was organizer-generated teams with modes and `/match`.
@@ -384,3 +442,4 @@ Auth and generic: `bad_request` (400), `invalid_oauth_state` (400), `email_not_v
 - v1.0-pre.5 (2026-10-24): behaviors the backend builders decided where the contract was silent (M1–M3 merge). Section 2: `GET /api/orgs` body, roster matching (email rows by email only), `email_domains` rules (subdomains match), `verification` defaults to `manual`, re-requesting after pending/decline, approve/decline/admins responses and errors, PATCH semantics, roster limits and errors, feed window and ordering. Section 3/8: `social_notes` is untrusted text. Section 4: pending-request exclusions, similarity-mode `score`, `ranked_by` with no candidates, `limit` rules, socials stripped before the agents. Section 5: accepting resolves crossing and redundant requests together, stale accepts return the existing group or connection; new 409s `already_connected`, `duplicate_request`, wider `already_in_group`. Section 7: connections list body. Section 8: interview token lifecycle, error codes and summary limits. Open questions: traits shape (Gemini dev), excluding full or capped candidates, and org API proposals.
 - v1.0-pre.6 (2026-10-25): review fixes. Section 2: only a verified email match auto-approves; a name-only roster match stays pending, and join requests gain `roster_match` (`email` | `name` | null); a re-request after a decline always waits for an admin. Section 4: people at `max_groups_per_user`, and all people once `group_count` is reached, are excluded (resolves that open question); the `Public info` line is stripped with `Socials` before the agents; one-type fill with `reason: null` and the 300-character reason cap. Contact and social values reject control characters (422).
 - v1.0-pre.7 (2026-10-25): additive endpoints and fields for the frontend. Section 1: `GET /api/me/profile`. Section 2: the feed returns the org `name`; new `GET /api/orgs/{org_id}` (404 for hidden orgs without a membership row); both removed from the open proposals. Section 5: the full `GET /api/requests` item, with new `direction` and `other_party`. Section 6: new `GET /api/threads/{thread_id}` (`kind`, viewer-relative `title`, `participants`), and messages gain `sender_name`. No existing field changed.
+- v1.0-pre.8 (2026-10-25): AI features and UX merged in from main. Section 1: `GET /api/me/profile` gains `overview` (one entry; keeps `interviewed`, `traits` null when empty). Section 2: campus-signal endpoints `GET /api/enrichment/context|maps|calendar|social` (signed-in only). Section 3: `POST /api/question-suggestions`; a host joining their own event is 403 `is_host`; joins regenerate the overview in the background. Section 4: `people[].summary` prefers `overview`; matching signals documented. Section 7: team page `owner_user_id`, members' `summary` prefers `overview`, groups named `Squad …`. Section 8: `POST /profile-overview` (backend sends `social_notes: null`), `POST /generate-questions`, enriched `/recommend` (`traits`, `topic_signals`, `group_need`); an interview summary triggers an overview regen. Error codes `is_host`, `agents_unavailable`, and the agents-only `overview_failed`, `quizgen_failed`, `recommender_failed`, `gemini_not_configured`.
