@@ -70,7 +70,7 @@ docker compose logs -f backend            # or agents / caddy / frontend
 git pull && docker compose up -d --build  # update: rebuilds, re-runs migrations, rebuilds the SPA
 docker compose up -d --build frontend     # rebuild the SPA only
 docker compose up -d --force-recreate backend   # pick up backend/.env changes (restart alone doesn't)
-docker compose exec backend python -m scripts.seed --reset   # demo reset: wipe and reseed
+docker compose exec backend python -m app.seed --reset --yes   # demo reset: wipe seed data and reseed (--yes is required outside local)
 ```
 Don't delete the `squadup_caddy_data` volume: it holds the certificates, and reissuing too often hits Let's Encrypt rate limits.
 
