@@ -137,6 +137,13 @@ def list_requests(db: Session, user: User, *, box: str, event_id: str | None) ->
             target = {"user_id": r.target_user_id, "name": names.get(r.target_user_id)}
         else:
             target = {"group_id": r.target_group_id, "name": group_names.get(r.target_group_id)}
+        # The other side from the viewer's point of view: the target (user or group) for an
+        # outgoing request, the sender for an incoming one.
+        if box == "outgoing":
+            other = {"type": r.target_type, "id": r.target_user_id or r.target_group_id,
+                     "name": target["name"]}
+        else:
+            other = {"type": "user", "id": r.sender_id, "name": names.get(r.sender_id)}
         out.append(
             {
                 "request_id": r.id,
@@ -144,6 +151,8 @@ def list_requests(db: Session, user: User, *, box: str, event_id: str | None) ->
                 "sender": {"user_id": r.sender_id, "name": names.get(r.sender_id)},
                 "target_type": r.target_type,
                 "target": target,
+                "direction": box,
+                "other_party": other,
                 "message": r.message,
                 "status": r.status,
                 "thread_id": r.thread_id,

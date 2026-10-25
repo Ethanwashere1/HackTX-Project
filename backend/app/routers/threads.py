@@ -23,6 +23,12 @@ class MessageIn(BaseModel):
         return v
 
 
+@router.get("/{thread_id}")
+def get_thread(thread_id: str, user: CurrentUser, db: DbSession):
+    thread = svc.get_thread_for_participant(db, thread_id, user)
+    return svc.thread_payload(db, thread, user)
+
+
 @router.get("/{thread_id}/messages")
 def list_messages(
     thread_id: str,
@@ -42,7 +48,7 @@ def post_message(thread_id: str, body: MessageIn, user: CurrentUser, db: DbSessi
     db.add(msg)
     db.commit()
     db.refresh(msg)
-    return svc.message_payload(msg)
+    return svc.message_payload(msg, user.name)
 
 
 @router.post("/{thread_id}/call")

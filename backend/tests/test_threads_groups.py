@@ -53,7 +53,7 @@ def test_chat_on_a_request_thread(trio):
     resp = ana.post(f"/api/threads/{thread_id}/messages", json={"text": "  Hi!  "})
     assert resp.status_code == 201, resp.text
     m1 = resp.json()
-    assert set(m1) == {"message_id", "sender_id", "text", "sent_at"}
+    assert set(m1) == {"message_id", "sender_id", "sender_name", "text", "sent_at"}
     assert m1["message_id"].startswith("msg_") and m1["sender_id"] == uid(ana) and m1["text"] == "Hi!"
     assert m1["sent_at"].endswith("Z")
     m2 = ben.post(f"/api/threads/{thread_id}/messages", json={"text": "Hey"}).json()

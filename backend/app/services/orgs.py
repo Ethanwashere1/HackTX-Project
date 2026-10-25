@@ -202,6 +202,16 @@ def list_orgs_payload(db: Session, user: User) -> dict:
     return {"orgs": [org_payload(org, m, counts.get(org.id, 0)) for org, m in rows]}
 
 
+def visible_org_payload(db: Session, org_id: str, user: User) -> dict:
+    """One org as in GET /api/orgs, if it would be listed there for the user: discoverable, or
+    the user has a membership row (any status). Otherwise 404, so hidden orgs can't be probed."""
+    org = db.exec(select(Org).where(Org.id == org_id)).first()
+    member = get_org_member(db, org_id, user.id) if org is not None else None
+    if org is None or (member is None and not org.discoverable):
+        raise AppError(404, "not_found", "Org not found")
+    return org_payload(org, member, approved_counts(db, [org.id]).get(org.id, 0))
+
+
 def join_requests_payload(db: Session, org_id: str, status: str) -> dict:
     """Admin view. `roster_match` ("email" | "name" | null) says how each user matches the org's
     uploaded roster, so admins can spot a name-only match, which is never auto-approved."""
@@ -230,6 +240,7 @@ def join_requests_payload(db: Session, org_id: str, status: str) -> dict:
 
 def feed_payload(db: Session, org_id: str, user: User) -> dict:
     """Upcoming events of the org (unscheduled ones last). Caller checks membership."""
+    org = get_org(db, org_id)
     counts = (
         select(EventMember.event_id, func.count().label("n"))
         .group_by(EventMember.event_id)
@@ -258,6 +269,7 @@ def feed_payload(db: Session, org_id: str, user: User) -> dict:
     ) if event_ids else set()
     return {
         "org_id": org_id,
+        "name": org.name,
         "events": [
             {
                 "event_id": e.id,

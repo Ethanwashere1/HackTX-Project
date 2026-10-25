@@ -68,7 +68,7 @@ _Last updated: 2026-10-24 (HackTX weekend). **Pivoted to the new product spec.**
 - **Frontend devs (`frontend/`):** all UI, plus all unit and regression testing of the web app (frontend). Backend tests stay with the Claude tester.
 
 ## Contract summary
-See [docs/CONTRACT.md](docs/CONTRACT.md) (DRAFT v1.0-pre.6). It covers:
+See [docs/CONTRACT.md](docs/CONTRACT.md) (DRAFT v1.0-pre.7). It covers:
 - the session-cookie auth flow
 - `/api` endpoints for orgs, events, joining, recommendations, requests, threads/chat/call and groups
 - `/internal` endpoints, `POST /recommend` and the interview WebSocket between the backend and agents
@@ -186,4 +186,4 @@ See [docs/CONTRACT.md](docs/CONTRACT.md) (DRAFT v1.0-pre.6). It covers:
 11. Credentials: real TigerData, Google OAuth, Gemini, Snowflake and SerpAPI values come later. Until then `backend/.env` holds placeholders.
 12. **For the Gemini dev:** interview summary `traits` shape. CONTRACT section 8 shows flat traits (`{"working_style": …}`), but `agents/interview.py` sends `{"highlights": [...]}`. The backend accepts any JSON object, so both work today; which shape is canonical?
 13. Recommendations: should people who have hit `max_groups_per_user`, or everyone once the event has `group_count` groups, be excluded? **Resolved: yes.** Recommendations now follow the accept rules. People at their group limit are excluded but stay reachable through their open group. There are no people once the event has `group_count` groups, and nothing at all once the viewer is at their own limit (CONTRACT section 4).
-14. Org API proposals (frontend input wanted): add `name` to the feed response; add `GET /api/orgs/{org_id}`; return the auto-approved count from `PUT /roster`.
+14. Org API proposals (frontend input wanted): return the auto-approved count from `PUT /roster`. (Done in CONTRACT v1.0-pre.7: `name` in the feed response and `GET /api/orgs/{org_id}`.)

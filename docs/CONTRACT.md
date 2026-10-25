@@ -32,6 +32,13 @@ _Status: draft, 2026-10-24, rewritten for the new product spec. Sections 8–9 (
  "orgs": [{"org_id": "org_ut", "name": "UT Austin"}],
  "contacts": [{"kind": "discord", "value": "ana#1234"}]}
 ```
+- **`GET /api/me/profile`:** the user's own shared profile, for their profile page. `summary` and `traits` are null until an interview summary is saved; `interviewed` is true once one is. The SerpAPI `social_notes` and the interview transcript are never returned.
+```json
+{"user_id": "usr_a1", "name": "Ana Ruiz", "email": "ana@utexas.edu",
+ "summary": "Frontend dev who loves climate apps", "traits": {"ambition": "win"},
+ "socials": [{"kind": "github", "value": "ana-ruiz"}],
+ "contacts": [{"kind": "discord", "value": "ana#1234"}], "interviewed": true}
+```
 - **`PUT /api/me/contacts`:** body `{"contacts": [{"kind": "phone", "value": "+1…"}]}` (max 20, replaces the whole list). Returns 200 `{"contacts": [...]}`. Contacts are visible only to the user's group-mates and connections.
 - **Login errors:**
   - `/login` returns 503 `oauth_not_configured` while the Google credentials are unset.
@@ -53,6 +60,7 @@ Endpoints:
 {"orgs": [{"org_id": "org_ut", "name": "UT Austin", "verification": "email_domain", "email_domains": ["utexas.edu"],
            "discoverable": true, "member_count": 312, "my_role": "member", "my_status": "approved"}]}
 ```
+- **`GET /api/orgs/{org_id}`:** one org, the same object as an item of `GET /api/orgs`. Visible to any signed-in user when the org is discoverable or they have a membership row (any status); otherwise 404 `not_found`, the same as an unknown org, so hidden orgs can't be probed.
 - **`POST /api/orgs`:** the creator becomes the org's first admin. `discoverable` (boolean, default `true`) controls whether non-members see the org in `GET /api/orgs`; a non-discoverable org is joined by link. `verification` defaults to `manual`.
 ```json
 {"name": "UT Austin", "verification": "email_domain", "email_domains": ["utexas.edu"], "discoverable": true}
@@ -68,11 +76,11 @@ Endpoints:
 - **`POST /api/orgs/{org_id}/admins`** (admin): `{"user_id": "usr_b2"}` makes an approved member an admin. Returns `{"user_id": "usr_b2", "role": "admin"}`, or 404 `not_found` if the user isn't an approved member.
 - **`GET /api/orgs/{org_id}/feed`:** approved members only; anyone else, including for an unknown org, gets 403 `not_org_member`.
 ```json
-{"org_id": "org_ut", "events": [{"event_id": "evt_h1", "name": "HackTX team-up", "type": "structured",
+{"org_id": "org_ut", "name": "UT Austin", "events": [{"event_id": "evt_h1", "name": "HackTX team-up", "type": "structured",
   "tone": "casual", "starts_at": "2026-10-25T15:00:00Z", "member_count": 42, "joined": false}]}
 ```
   - "Upcoming" means `starts_at` is null, in the future, or within the last 12 hours. Ordered by `starts_at`, nulls last; max 100 events.
-  - Open proposals (PLAN.md Open Questions): add the org `name` to the feed response, add `GET /api/orgs/{org_id}`, and return the auto-approved count from `PUT /roster`.
+  - Open proposal (PLAN.md Open Questions): return the auto-approved count from `PUT /roster`.
 
 ## 3. Events
 **`POST /api/events`** (host)
@@ -164,7 +172,19 @@ Endpoints:
 ```
 - A chat thread is created with each request so both sides can talk before agreeing.
 
-**`GET /api/requests?box=incoming|outgoing&event_id=…`** lists requests with their sender, target, status and thread_id.
+**`GET /api/requests?box=incoming|outgoing&event_id=…`** lists requests, newest first. `incoming` holds requests to the user or to any of their groups (not their own); `outgoing` holds the ones they sent.
+```json
+{"requests": [{"request_id": "req_9", "event_id": "evt_h1",
+  "sender": {"user_id": "usr_a1", "name": "Ana Ruiz"},
+  "target_type": "user", "target": {"user_id": "usr_b2", "name": "Ben Li"},
+  "direction": "outgoing", "other_party": {"type": "user", "id": "usr_b2", "name": "Ben Li"},
+  "message": "Want to team up?", "status": "pending", "thread_id": "thr_9",
+  "group_id": null, "connection_id": null,
+  "created_at": "2026-10-24T21:00:00Z", "decided_at": null}]}
+```
+- `target` is `{"user_id", "name"}` for a `user` target and `{"group_id", "name"}` for a `group` target.
+- `direction` echoes the box. `other_party` is the other side from the viewer: the target (`type` `user` or `group`) for an outgoing request, the sender (`type` `user`) for an incoming one.
+- `group_id` / `connection_id` are the outcome of an accept, else null.
 
 **`POST /api/requests/{request_id}/accept`** and **`/decline`**
 - **Who can accept:**
@@ -191,8 +211,19 @@ Endpoints:
 - Accept response: `{"request_id": "req_9", "status": "accepted", "group_id": "grp_4" | null, "connection_id": "con_2" | null}`.
 
 ## 6. Threads, chat and calls
-- **`GET /api/threads/{thread_id}/messages?after=msg_…`** (participants only): `{"messages": [{"message_id": "msg_1", "sender_id": "usr_a1", "text": "Hi!", "sent_at": "…"}]}`.
-- **`POST /api/threads/{thread_id}/messages`:** `{"text": "Hi!"}`, returns 201 with the message.
+All thread endpoints are for participants only: 404 `not_found` for an unknown thread, 403 `forbidden` for a non-participant.
+- **`GET /api/threads/{thread_id}`:** what the thread is about and who is in it.
+```json
+{"thread_id": "thr_9", "kind": "request", "title": "Ben Li", "event_id": "evt_h1",
+ "group_id": null, "request_id": "req_9",
+ "participants": [{"user_id": "usr_a1", "name": "Ana Ruiz"}, {"user_id": "usr_b2", "name": "Ben Li"}]}
+```
+  - `kind`: `group` (a group's own thread), `request` (the thread created with a request), or `connection` (in an informal event the connection keeps the accepted request's thread, so that thread then reports `connection`).
+  - `title` is from the viewer's side: the group name for a `group` thread; for a `request` or `connection` thread, the other person's name, except that a user → group request shows the group name to its sender and the sender's name to the group's members.
+  - `group_id`: the group for a `group` thread, the target group for a user → group request, else null. `request_id`: the request that created a `request` or `connection` thread, else null.
+  - `participants` are the current participants, oldest first (people who left a group are removed).
+- **`GET /api/threads/{thread_id}/messages?after=msg_…`:** `{"messages": [{"message_id": "msg_1", "sender_id": "usr_a1", "sender_name": "Ana Ruiz", "text": "Hi!", "sent_at": "…"}]}`, oldest first; `limit` 1–200 (default 100).
+- **`POST /api/threads/{thread_id}/messages`:** `{"text": "Hi!"}` (1–4000 chars after trimming), returns 201 with the message object above, including `sender_name`.
 - **`POST /api/threads/{thread_id}/call`:** returns `{"call_url": "https://meet.jit.si/squadup-thr9-x7k2"}`. The URL is stable per thread.
 
 Each group has its own thread (`group.thread_id`). Clients poll about every 2 s.
@@ -314,3 +345,4 @@ Auth and generic: `bad_request` (400), `invalid_oauth_state` (400), `email_not_v
 - v1.0-pre.4 (2026-10-24): one profile per person. A user's profile (socials, social notes, interview summary) is shared across all their events; each event keeps its own answers and match text. Section 3: joining creates or updates that shared profile. Section 8: the interview summary is stored on the user's profile and re-embeds all of the user's event profiles. No request or response shapes changed.
 - v1.0-pre.5 (2026-10-24): behaviors the backend builders decided where the contract was silent (M1–M3 merge). Section 2: `GET /api/orgs` body, roster matching (email rows by email only), `email_domains` rules (subdomains match), `verification` defaults to `manual`, re-requesting after pending/decline, approve/decline/admins responses and errors, PATCH semantics, roster limits and errors, feed window and ordering. Section 3/8: `social_notes` is untrusted text. Section 4: pending-request exclusions, similarity-mode `score`, `ranked_by` with no candidates, `limit` rules, socials stripped before the agents. Section 5: accepting resolves crossing and redundant requests together, stale accepts return the existing group or connection; new 409s `already_connected`, `duplicate_request`, wider `already_in_group`. Section 7: connections list body. Section 8: interview token lifecycle, error codes and summary limits. Open questions: traits shape (Gemini dev), excluding full or capped candidates, and org API proposals.
 - v1.0-pre.6 (2026-10-25): review fixes. Section 2: only a verified email match auto-approves; a name-only roster match stays pending, and join requests gain `roster_match` (`email` | `name` | null); a re-request after a decline always waits for an admin. Section 4: people at `max_groups_per_user`, and all people once `group_count` is reached, are excluded (resolves that open question); the `Public info` line is stripped with `Socials` before the agents; one-type fill with `reason: null` and the 300-character reason cap. Contact and social values reject control characters (422).
+- v1.0-pre.7 (2026-10-25): additive endpoints and fields for the frontend. Section 1: `GET /api/me/profile`. Section 2: the feed returns the org `name`; new `GET /api/orgs/{org_id}` (404 for hidden orgs without a membership row); both removed from the open proposals. Section 5: the full `GET /api/requests` item, with new `direction` and `other_party`. Section 6: new `GET /api/threads/{thread_id}` (`kind`, viewer-relative `title`, `participants`), and messages gain `sender_name`. No existing field changed.
