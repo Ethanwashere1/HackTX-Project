@@ -237,8 +237,8 @@ def test_join_syncs_to_snowflake(login_as, monkeypatch):
     m1, m2 = members(event_id)
     assert m1.snowflake_synced_at is not None and m2.snowflake_synced_at is not None
 
-    creates = sf.statements("CREATE TABLE IF NOT EXISTS PROFILE_EMBEDDINGS")
-    merges = sf.statements("MERGE INTO PROFILE_EMBEDDINGS")
+    creates = sf.statements("CREATE TABLE IF NOT EXISTS SQUADUP_EMBEDDINGS")
+    merges = sf.statements("MERGE INTO SQUADUP_EMBEDDINGS")
     assert len(creates) == 1 and sf.connects == 1  # table check and connection are reused
     assert "VECTOR(FLOAT, 768)" in creates[0][0]
     assert [p["id_0"] for _, p in merges] == [m1.id, m2.id]  # one join, one embedding, one MERGE
@@ -261,7 +261,7 @@ def test_upsert_batches_rows_into_few_merges(monkeypatch):
     older = _row(0, utcnow() - timedelta(minutes=5))
     rows = [older] + [_row(i) for i in range(30)]  # em_000 twice: only the newer vector is sent
     snowflake_store.upsert_embeddings(rows)
-    merges = sf.statements("MERGE INTO PROFILE_EMBEDDINGS")
+    merges = sf.statements("MERGE INTO SQUADUP_EMBEDDINGS")
     assert [len(p) for _, p in merges] == [25 * 5, 5 * 5]  # MERGE_BATCH rows per statement
     sent = {p[f"id_{i}"]: p[f"embedded_at_{i}"] for _, p in merges for i in range(len(p) // 5)}
     assert len(sent) == 30 and sent["em_000"] == rows[1].embedded_at.isoformat()

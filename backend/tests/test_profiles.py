@@ -151,6 +151,6 @@ def test_configured_flags(monkeypatch):
                       internal_api_key="i", **snowflake)
     assert s.gemini_configured and s.serpapi_configured and s.internal_key_configured
     assert s.snowflake_configured  # the role is optional
-    assert (s.gemini_embed_model, s.snowflake_table) == ("gemini-embedding-001", "PROFILE_EMBEDDINGS")
+    assert (s.gemini_embed_model, s.snowflake_table) == ("gemini-embedding-001", "SQUADUP_EMBEDDINGS")
     assert not make_settings(monkeypatch, **{**snowflake, "snowflake_schema": "REPLACE_ME"}).snowflake_configured
     assert not make_settings(monkeypatch, gemini_api_key="REPLACE_ME").gemini_configured
