@@ -5,7 +5,7 @@ import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter
+from fastapi import APIRouter, BackgroundTasks
 from pydantic import BaseModel, Field, StringConstraints, field_validator, model_validator
 from sqlalchemy import null
 from sqlalchemy.exc import IntegrityError
@@ -14,12 +14,12 @@ from app.auth.deps import CurrentUser, DbSession
 from app.auth.sessions import hash_token
 from app.config import get_settings
 from app.errors import AppError
-from app.models import Event, EventMember, InterviewToken, Profile, Question
+from app.models import Event, EventMember, InterviewToken, Question
 from app.models.base import utcnow
 from app.routers.me import ContactIn
 from app.services import events as svc
+from app.services import profiles as profile_svc
 from app.services.groups import connections_payload
-from app.services.profiles import build_profile_text, on_profile_saved, schedule_social_lookup
 
 router = APIRouter(prefix="/api/events", tags=["events"])
 
@@ -142,7 +142,9 @@ def get_event(event_id: str, user: CurrentUser, db: DbSession):
 
 
 @router.post("/{event_id}/join", status_code=201)
-def join_event(event_id: str, body: JoinBody, user: CurrentUser, db: DbSession):
+def join_event(
+    event_id: str, body: JoinBody, user: CurrentUser, db: DbSession, background: BackgroundTasks
+):
     event = svc.get_visible_event(db, event_id, user)
     if svc.get_membership(db, event.id, user.id) is not None:
         raise AppError(409, "already_joined", "You already joined this event")
@@ -151,26 +153,29 @@ def join_event(event_id: str, body: JoinBody, user: CurrentUser, db: DbSession):
     fields = svc.validate_fields(event.required_fields, body.fields)
     socials = [{"kind": s.kind, "value": s.value} for s in body.socials]
 
-    profile = Profile(
-        event_id=event.id,
-        user_id=user.id,
-        profile_text=build_profile_text(event, questions, answers, fields, socials),
-    )
     try:
-        db.add(
-            EventMember(
-                event_id=event.id, user_id=user.id, answers=answers, fields=fields, socials=socials
-            )
+        # The person profile is shared across events: submitted socials replace the same kinds.
+        profile = profile_svc.get_or_create_profile(db, user.id, lock=True)
+        merged = profile_svc.merge_socials(profile.socials, socials)
+        socials_changed = merged != profile.socials
+        if socials_changed:
+            profile.socials = merged
+            profile.updated_at = utcnow()
+            db.add(profile)
+        db.add(EventMember(event_id=event.id, user_id=user.id, answers=answers, fields=fields))
+        db.flush()
+        # New socials change the text of every event the user is in, not just this one.
+        member_ids = profile_svc.rebuild_member_texts(
+            db, user.id, None if socials_changed else [event.id]
         )
-        db.flush()  # the profile's FK needs the member row first
-        db.add(profile)
         db.commit()
     except IntegrityError:
         db.rollback()  # a concurrent join by the same user won the unique constraint
         raise AppError(409, "already_joined", "You already joined this event")
-    db.refresh(profile)
-    schedule_social_lookup(profile, socials)
-    on_profile_saved(profile)
+    # After the response; failures are logged and never affect the join.
+    background.add_task(profile_svc.run_hook, profile_svc.on_member_text_changed, member_ids)
+    if socials:
+        background.add_task(profile_svc.run_hook, profile_svc.schedule_social_lookup, user.id, socials)
     return {
         "event_id": event.id,
         "profile_status": "ready",

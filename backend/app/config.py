@@ -15,7 +15,7 @@ BACKEND_DIR = Path(__file__).resolve().parent.parent
 PLACEHOLDER = "REPLACE_ME"
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
 DEV_SESSION_SECRET = "dev-only-insecure-session-secret"
-# Fixed by migration 0001 (profiles.embedding is vector(768)); changing it needs a new migration.
+# Fixed by the migrations (event_members.embedding is vector(768)); changing it needs a new migration.
 EMBEDDING_DIM = 768
 
 log = logging.getLogger(__name__)
@@ -56,6 +56,9 @@ class Settings(BaseSettings):
     dev_login: bool = False
 
     gemini_api_key: str = ""
+    # Requested with outputDimensionality=EMBEDDING_DIM (768).
+    gemini_embed_model: str = "gemini-embedding-001"
+    gemini_timeout_s: float = 10
     embedding_dim: int = 768
 
     snowflake_account: str = ""
@@ -65,9 +68,15 @@ class Settings(BaseSettings):
     snowflake_database: str = ""
     snowflake_schema: str = ""
     snowflake_role: str = ""
+    snowflake_table: str = "PROFILE_EMBEDDINGS"
+    snowflake_timeout_s: float = 5
 
     serpapi_api_key: str = ""
+    serpapi_timeout_s: float = 8
+    # Cached social lookups (social_lookups) are reused for this long.
+    social_lookup_ttl_hours: float = 24
     agents_url: str = "http://localhost:8000"
+    agents_timeout_s: float = 20
     # Browser-facing interview WebSocket. Empty -> derived from AGENTS_URL (http->ws) + /ws/interview.
     agents_ws_url: str = ""
     internal_api_key: str = ""
@@ -99,6 +108,33 @@ class Settings(BaseSettings):
             or is_placeholder(self.google_client_secret)
             or is_placeholder(self.oauth_redirect_url)
         )
+
+    @property
+    def gemini_configured(self) -> bool:
+        return not is_placeholder(self.gemini_api_key)
+
+    @property
+    def snowflake_configured(self) -> bool:
+        """Every SNOWFLAKE_* connection setting is set (the role is optional)."""
+        return not any(
+            is_placeholder(v)
+            for v in (
+                self.snowflake_account,
+                self.snowflake_user,
+                self.snowflake_password,
+                self.snowflake_warehouse,
+                self.snowflake_database,
+                self.snowflake_schema,
+            )
+        )
+
+    @property
+    def serpapi_configured(self) -> bool:
+        return not is_placeholder(self.serpapi_api_key)
+
+    @property
+    def internal_key_configured(self) -> bool:
+        return not is_placeholder(self.internal_api_key)
 
     @property
     def effective_session_secret(self) -> str:

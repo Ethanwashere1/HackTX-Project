@@ -7,7 +7,18 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.errors import install_error_handlers
-from app.routers import auth, events, groups, health, me, requests, threads
+from app.routers import (
+    auth,
+    events,
+    groups,
+    health,
+    internal,
+    me,
+    orgs,
+    recommendations,
+    requests,
+    threads,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
@@ -30,6 +41,9 @@ def create_app() -> FastAPI:
     app.include_router(requests.router)
     app.include_router(threads.router)
     app.include_router(groups.router)
+    app.include_router(orgs.router)
+    app.include_router(recommendations.router)
+    app.include_router(internal.router)
     if settings.is_dev_login_enabled():
         logging.getLogger(__name__).warning("DEV_LOGIN is enabled: POST /api/auth/dev-login is open")
     return app

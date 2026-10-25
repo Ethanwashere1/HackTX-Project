@@ -1,4 +1,4 @@
-"""Database-level invariants from migration 0001 (Alembic's model diff doesn't cover these)."""
+"""Database-level invariants from the migrations (Alembic's model diff doesn't cover these)."""
 
 import pytest
 from sqlalchemy import inspect, text
@@ -142,19 +142,37 @@ def test_group_member_event_must_match_group(db, ids):
     add(ids["evt"])
 
 
-def test_profile_requires_event_membership(db, ids):
+def test_one_profile_per_user(db, ids):
     def add_profile():
-        db.execute(text("INSERT INTO profiles (id, event_id, user_id, traits, transcript,"
-                        " profile_text, updated_at) VALUES (:id, :e, :u, '{}', '[]', '', now())"),
-                   {"id": new_id("prf"), "e": ids["evt"], "u": ids["u2"]})
+        db.execute(text("INSERT INTO profiles (id, user_id, traits, transcript, socials, updated_at)"
+                        " VALUES (:id, :u, '{}', '[]', '[]', now())"),
+                   {"id": new_id("prf"), "u": ids["u2"]})
         db.commit()
 
+    add_profile()
     assert_rejected(db, add_profile)
-    db.execute(text("INSERT INTO event_members (id, event_id, user_id, answers, fields, socials,"
-                    " joined_at) VALUES (:id, :e, :u, '{}', '{}', '[]', now())"),
+
+
+def test_event_member_profile_text_defaults_to_empty(db, ids):
+    db.execute(text("INSERT INTO event_members (id, event_id, user_id, answers, fields, joined_at)"
+                    " VALUES (:id, :e, :u, '{}', '{}', now())"),
                {"id": new_id("em"), "e": ids["evt"], "u": ids["u2"]})
     db.commit()
-    add_profile()
+    row = db.execute(text("SELECT profile_text, embedding FROM event_members")).one()
+    assert tuple(row) == ("", None)
+
+
+def test_social_lookups_unique_per_kind_and_handle(db):
+    def add(status="ok", handle="ana-ruiz"):
+        db.execute(text("INSERT INTO social_lookups (id, kind, handle, status, fetched_at)"
+                        " VALUES (:id, 'github', :h, :s, now())"),
+                   {"id": new_id("soc"), "h": handle, "s": status})
+        db.commit()
+
+    add()
+    assert_rejected(db, add)
+    assert_rejected(db, lambda: add(status="pending", handle="other"))
+    add(status="failed", handle="other")
 
 
 def test_lookup_indexes_exist(db):

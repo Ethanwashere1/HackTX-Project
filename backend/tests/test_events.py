@@ -200,14 +200,15 @@ def test_join_stores_answers_and_builds_profile(login_as, db):
     assert member.user_id == ana.user["user_id"]
     assert member.answers == {q1: "frontend", q2: "climate apps"}
     assert member.fields == {"skills": ["react", "figma"], "experience_level": "intermediate"}
-    assert member.socials == [{"kind": "github", "value": "ana-ruiz"},
-                              {"kind": "instagram", "value": "@ana"}]
-
-    profile = db.exec(select(Profile).where(Profile.event_id == event_id)).one()
-    assert profile.user_id == ana.user["user_id"] and profile.embedding is None
+    assert member.embedding is None and member.embedded_at is None
     for snippet in ("HackTX team-up", "react, figma", "intermediate", "What role do you want?",
                     "frontend", "climate apps", "github ana-ruiz"):
-        assert snippet in profile.profile_text
+        assert snippet in member.profile_text
+
+    profile = db.exec(select(Profile)).one()
+    assert profile.user_id == ana.user["user_id"]
+    assert profile.socials == [{"kind": "github", "value": "ana-ruiz"},
+                               {"kind": "instagram", "value": "@ana"}]
 
     got = ana.get(f"/api/events/{event_id}").json()
     assert got["my_membership"]["group_id"] is None
@@ -317,7 +318,7 @@ def test_interview_token(login_as, db):
     resp = c.post(f"/api/events/{event_id}/interview")
     assert resp.status_code == 201, resp.text
     body = resp.json()
-    assert body["ws_url"] == "ws://localhost:8000/ws/interview"
+    assert body["ws_url"] == "ws://agents.test/ws/interview"
     assert body["expires_in"] == 600
     token = body["interview_token"]
     assert token.startswith("itk_") and len(token) > 30

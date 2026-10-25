@@ -79,6 +79,13 @@ def _isolate(database_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[Non
     monkeypatch.setattr(settings, "session_cookie_secure", False)
     monkeypatch.setattr(settings, "google_client_id", "REPLACE_ME")
     monkeypatch.setattr(settings, "google_client_secret", "REPLACE_ME")
+    # External services are off in every test (no network); tests that need one mock it.
+    monkeypatch.setattr(settings, "gemini_api_key", "REPLACE_ME")
+    monkeypatch.setattr(settings, "serpapi_api_key", "REPLACE_ME")
+    monkeypatch.setattr(settings, "snowflake_account", "REPLACE_ME")
+    monkeypatch.setattr(settings, "internal_api_key", "test-internal-key")
+    monkeypatch.setattr(settings, "agents_url", "http://agents.test")
+    monkeypatch.setattr(settings, "agents_ws_url", "")
     yield
     tables = ", ".join(f'"{t.name}"' for t in SQLModel.metadata.sorted_tables)
     with dbmod.get_engine().begin() as conn:

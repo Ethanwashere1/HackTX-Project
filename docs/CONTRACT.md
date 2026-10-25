@@ -115,7 +115,7 @@ Endpoints:
   - `fields` may only contain the event's `required_fields`, and each must be non-empty: a string (max 500), number, boolean, or list of strings (max 50).
 - `socials` use the contact `kind` enum (max 10); an unknown kind is 422 `validation_error`.
 - Returns 409 `already_joined` if the user already joined.
-- Joining stores the answers and creates the user's profile for the event. `profile_status` is `ready` once the profile text is saved (the embedding follows asynchronously).
+- Joining stores the answers and creates or updates the user's profile, which is shared across events. `profile_status` is `ready` once the profile text is saved (the embedding follows asynchronously).
 - SerpAPI lookup runs asynchronously and never blocks the join.
 
 **`POST /api/events/{event_id}/interview`** starts the optional interview:
@@ -210,7 +210,7 @@ The agents service calls this when the WebSocket opens. It returns 401 if the to
  "input_mode": "voice"}
 // 200 → {"ok": true}
 ```
-The backend stores the transcript and summary, then re-embeds the profile.
+The backend stores the transcript and summary on the user's profile, then re-embeds the user's event profiles.
 
 ### Backend → agents: POST /recommend
 ```json
@@ -272,3 +272,4 @@ Auth and generic: `bad_request` (400), `invalid_oauth_state` (400), `email_not_v
 - v1.0-pre.1 (2026-10-24): org joins are now requests with a per-org verification method (`manual`, `email_domain`, `roster`), plus admin endpoints and roster upload. Added the event setting `max_groups_per_user` and the error `group_limit_per_user`. Sections 8–9 approved by the Gemini dev.
 - v1.0-pre.2 (2026-10-24): section 1 clarifications from the backend M0 build: `PUT /api/me/contacts` response, OAuth login error codes and the cancel redirect, `next` restricted to relative paths, and the dev-only `POST /api/auth/dev-login` (local/test only, behind `DEV_LOGIN=1`). Added the matching error codes.
 - v1.0-pre.3 (2026-10-24): from the backend M0 review fixes and the M1 events build. Section 1: a missing `code` on the callback is 400 `bad_request`; email linking never overrides a different Google account (409 `account_conflict`). Section 2: orgs get `discoverable` (default true). Section 3: the full `GET /api/events/{id}` body (adds `org_id`, `created_at`, `share_url` and the event settings), create and join validation rules, 409 `already_joined`, 403 `not_org_member` for org events, and the interview endpoint's member-only rule plus 409 `interview_disabled`. New error codes `bad_request`, `account_conflict`, `interview_disabled`.
+- v1.0-pre.4 (2026-10-24): one profile per person. A user's profile (socials, social notes, interview summary) is shared across all their events; each event keeps its own answers and match text. Section 3: joining creates or updates that shared profile. Section 8: the interview summary is stored on the user's profile and re-embeds all of the user's event profiles. No request or response shapes changed.

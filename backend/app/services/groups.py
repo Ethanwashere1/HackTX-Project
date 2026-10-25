@@ -124,12 +124,10 @@ def leave_group(db: Session, group_id: str, user: User) -> None:
     db.commit()
 
 
-def _person(db: Session, event_id: str, user_id: str) -> dict:
-    """Name, event summary and contacts. Only call this for group-mates or connections."""
+def _person(db: Session, user_id: str) -> dict:
+    """Name, profile summary and contacts. Only call this for group-mates or connections."""
     user = db.get(User, user_id)
-    summary = db.exec(
-        select(Profile.summary).where(Profile.event_id == event_id, Profile.user_id == user_id)
-    ).first()
+    summary = db.exec(select(Profile.summary).where(Profile.user_id == user_id)).first()
     return {
         "user_id": user_id,
         "name": user.name if user else None,
@@ -145,7 +143,7 @@ def group_payload(db: Session, group: Group) -> dict:
         "event_id": group.event_id,
         "name": group.name,
         "thread_id": group.thread_id,
-        "members": [_person(db, group.event_id, uid) for uid in group_member_ids(db, group.id)],
+        "members": [_person(db, uid) for uid in group_member_ids(db, group.id)],
     }
 
 
@@ -165,7 +163,7 @@ def connections_payload(db: Session, event_id: str, user_id: str) -> list[dict]:
         out.append(
             {
                 "connection_id": c.id,
-                **_person(db, event_id, other),
+                **_person(db, other),
                 "thread_id": c.thread_id,
                 "connected_at": iso(c.created_at),
             }

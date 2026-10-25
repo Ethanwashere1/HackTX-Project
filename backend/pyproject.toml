@@ -13,6 +13,7 @@ dependencies = [
     "httpx>=0.27",
     "pydantic-settings>=2.4",
     "itsdangerous>=2.2",
+    "snowflake-connector-python>=3.12",
 ]
 
 [dependency-groups]

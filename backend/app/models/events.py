@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Any
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import CheckConstraint, Column, ForeignKeyConstraint, UniqueConstraint
+from sqlalchemy import CheckConstraint, Column, UniqueConstraint
 from sqlmodel import Field, SQLModel
 
 from app.config import EMBEDDING_DIM
@@ -67,6 +67,8 @@ class Question(SQLModel, table=True):
 
 
 class EventMember(SQLModel, table=True):
+    """One user's membership in one event, plus the per-event match data (text -> embedding)."""
+
     __tablename__ = "event_members"
     __table_args__ = (UniqueConstraint("event_id", "user_id", name="uq_event_members_event_user"),)
 
@@ -75,36 +77,12 @@ class EventMember(SQLModel, table=True):
     user_id: str = fk("users.id")
     answers: dict[str, Any] = json_field(dict)  # {question_id: value}
     fields: dict[str, Any] = json_field(dict)  # the event's required profile fields
-    socials: list[dict[str, Any]] = json_field(list)  # [{kind, value}]
     joined_at: datetime = created_at_field()
-
-
-class Profile(SQLModel, table=True):
-    """A user's matching profile within one event: answers + socials + interview -> embedding."""
-
-    __tablename__ = "profiles"
-    __table_args__ = (
-        UniqueConstraint("event_id", "user_id", name="uq_profiles_event_user"),
-        # A profile only exists for someone who joined the event.
-        ForeignKeyConstraint(
-            ["event_id", "user_id"],
-            ["event_members.event_id", "event_members.user_id"],
-            ondelete="CASCADE",
-            name="fk_profiles_event_member",
-        ),
-    )
-
-    id: str = id_field("prf")
-    event_id: str = fk("events.id", index=False)
-    user_id: str = fk("users.id")
-    summary: str | None = None
-    traits: dict[str, Any] = json_field(dict)
-    transcript: list[dict[str, Any]] = json_field(list)
-    interview_input_mode: str | None = Field(default=None, max_length=10)  # voice|text
-    social_notes: str | None = None
-    profile_text: str = ""
+    # answers + fields + the user's Profile (socials, social_notes, summary); see
+    # app.services.profiles.build_member_text. This is what gets embedded and sent to the agents.
+    profile_text: str = Field(default="", sa_column_kwargs={"server_default": ""})
     embedding: list[float] | None = Field(
         default=None, sa_column=Column(Vector(EMBEDDING_DIM), nullable=True)
     )
     embedded_at: datetime | None = ts_field()
-    updated_at: datetime = created_at_field()
+    snowflake_synced_at: datetime | None = ts_field()
