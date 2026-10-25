@@ -1,0 +1,327 @@
+# Merges non-draft pull requests opened from branches in this repository.
+# Fork pull requests are ignored: GITHUB_TOKEN cannot write on those events.
+#
+# To turn this off, open the Actions tab, select Automerge, and choose
+# "Disable workflow", or delete this file from the default branch.
+# A pull request that only deletes this file will not merge itself, because
+# GitHub loads the workflow from the pull request's merge result.
+#
+# This repository has no other workflows, so the job does not wait for
+# check_suite or workflow_run. It merges as soon as GitHub says the pull
+# request is mergeable.
+name: Automerge
+
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+
+# contents: write creates the merge commit.
+# pull-requests: write merges the pull request.
+# issues: write posts the conflict comment (pull request comments use the issues API).
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: automerge-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  automerge:
+    name: Merge pull request
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: >-
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - name: Squash-merge into the base branch
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_PROMPT_DISABLED: "1"
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          POLL_SECONDS: "5"
+          POLL_ATTEMPTS: "12"
+          RETRY_SLEEP: "2"
+        run: |
+          set -euo pipefail
+
+          poll_seconds="${POLL_SECONDS:-5}"
+          poll_attempts="${POLL_ATTEMPTS:-12}"
+          retry_sleep="${RETRY_SLEEP:-2}"
+
+          MARKER_CONFLICT="<!-- automerge:conflicts -->"
+          MARKER_BLOCKED="<!-- automerge:blocked -->"
+          MARKER_UNKNOWN="<!-- automerge:unknown -->"
+          MARKER_METHOD="<!-- automerge:method -->"
+
+          MERGE_OUTPUT=""
+          MERGE_STATUS=0
+          base=""
+
+          log() {
+            printf '[automerge] %s\n' "$1"
+          }
+
+          # template is always a literal from this file, never external input.
+          # shellcheck disable=SC2059
+          logf() {
+            local template="$1"
+            shift
+            printf "[automerge] ${template}\n" "$@"
+          }
+
+          notice() {
+            printf '::notice::%s\n' "$1"
+          }
+
+          show_untrusted() {
+            printf '%s\n' "$1" | sed 's/^::/ ::/'
+          }
+
+          fail() {
+            printf '::error::%s\n' "$1"
+            log "$1"
+            if [[ -n "${MERGE_OUTPUT}" ]]; then
+              log "Merge command output follows."
+              show_untrusted "${MERGE_OUTPUT}"
+            fi
+            exit 1
+          }
+
+          command -v gh >/dev/null || fail "gh is not installed on this runner."
+          command -v jq >/dev/null || fail "jq is not installed on this runner."
+
+          [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]] || fail "PR_NUMBER must be a number."
+          [[ "${REPO}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || fail "REPO must be owner/name."
+          [[ "${poll_seconds}" =~ ^[0-9]+$ ]] || fail "POLL_SECONDS must be a non-negative integer."
+          [[ "${poll_attempts}" =~ ^[0-9]+$ ]] || fail "POLL_ATTEMPTS must be a non-negative integer."
+          [[ "${retry_sleep}" =~ ^[0-9]+$ ]] || fail "RETRY_SLEEP must be a non-negative integer."
+          [[ "${poll_attempts}" -ge 1 ]] || fail "POLL_ATTEMPTS must be at least 1."
+
+          field() {
+            jq -r "$1" <<<"$2"
+          }
+
+          upper() {
+            tr '[:lower:]' '[:upper:]'
+          }
+
+          pr_json() {
+            gh pr view "${PR_NUMBER}" --repo "${REPO}" \
+              --json mergeable,mergeStateStatus,state,isDraft,baseRefName
+          }
+
+          post_comment() {
+            local marker="$1"
+            local body="$2"
+            local existing
+            existing="$(
+              gh api --paginate "repos/${REPO}/issues/${PR_NUMBER}/comments" \
+                | jq -r --arg marker "${marker}" '.[] | select((.body // "") | contains($marker)) | .id'
+            )"
+            if [[ -n "${existing}" ]]; then
+              log "Comment already on the pull request."
+              return 0
+            fi
+            gh pr comment "${PR_NUMBER}" --repo "${REPO}" \
+              --body "$(printf '%s\n\n%s' "${body}" "${marker}")" >/dev/null
+            log "Commented on the pull request."
+          }
+
+          is_transient_merge_error() {
+            grep -Eiq 'base branch was modified|head branch was modified|try the merge again' <<<"${MERGE_OUTPUT}"
+          }
+
+          is_permission_error() {
+            grep -Eiq 'not accessible by integration|HTTP 401|HTTP 403|Bad credentials|requires authentication|must have (admin|push) access|Resource not accessible' <<<"${MERGE_OUTPUT}"
+          }
+
+          is_conflict_error() {
+            grep -Eiq 'merge conflict|has conflicts|cannot be cleanly created|conflicting files' <<<"${MERGE_OUTPUT}"
+          }
+
+          is_blocked_error() {
+            grep -Eiq 'required approving review|required status check|review required|merging is blocked|requested changes' <<<"${MERGE_OUTPUT}"
+          }
+
+          is_method_disabled() {
+            grep -Eiq 'merges are not allowed|merge is not allowed|merges are not enabled|merge is not enabled|merge method is not allowed' <<<"${MERGE_OUTPUT}"
+          }
+
+          try_merge() {
+            local method="$1"
+            local attempt
+            case "${method}" in
+              squash|merge) ;;
+              *) fail "Refusing unexpected merge method." ;;
+            esac
+            for attempt in 1 2 3; do
+              logf 'Merging #%s into %s with --%s (attempt %s).' \
+                "${PR_NUMBER}" "${base}" "${method}" "${attempt}"
+              set +e
+              MERGE_OUTPUT="$(gh pr merge "${PR_NUMBER}" --repo "${REPO}" "--${method}" 2>&1)"
+              MERGE_STATUS=$?
+              set -e
+              if [[ -n "${MERGE_OUTPUT}" ]]; then
+                show_untrusted "${MERGE_OUTPUT}"
+              fi
+              if [[ "${MERGE_STATUS}" -eq 0 ]]; then
+                return 0
+              fi
+              if is_transient_merge_error && [[ "${attempt}" -lt 3 ]]; then
+                sleep "${retry_sleep}"
+                continue
+              fi
+              return "${MERGE_STATUS}"
+            done
+            return "${MERGE_STATUS}"
+          }
+
+          logf 'Considering pull request #%s in %s.' "${PR_NUMBER}" "${REPO}"
+
+          mergeable=""
+          merge_state=""
+          state=""
+          attempt=1
+          while [[ "${attempt}" -le "${poll_attempts}" ]]; do
+            pr="$(pr_json)"
+            state="$(field '.state' "${pr}" | upper)"
+            draft="$(field '.isDraft' "${pr}")"
+            mergeable="$(field '.mergeable' "${pr}" | upper)"
+            merge_state="$(field '.mergeStateStatus' "${pr}" | upper)"
+            base="$(field '.baseRefName' "${pr}")"
+            base="${base%%$'\n'*}"
+
+            logf 'Attempt %s/%s: state=%s draft=%s mergeable=%s mergeStateStatus=%s base=%s' \
+              "${attempt}" "${poll_attempts}" "${state}" "${draft}" "${mergeable}" "${merge_state}" "${base}"
+
+            if [[ "${state}" != "OPEN" ]]; then
+              logf 'Pull request is %s; nothing to merge.' "${state}"
+              exit 0
+            fi
+            if [[ "${draft}" == "true" ]]; then
+              log "Pull request is a draft; skipping."
+              exit 0
+            fi
+            if [[ "${mergeable}" == "CONFLICTING" || "${merge_state}" == "DIRTY" ]]; then
+              post_comment "${MARKER_CONFLICT}" \
+                "$(printf 'This pull request has merge conflicts with %s, so automerge left it open. Resolve the conflicts and push to retry.' "${base}")"
+              notice "Automerge left this pull request open because it has merge conflicts."
+              exit 0
+            fi
+            if [[ "${mergeable}" == "MERGEABLE" ]]; then
+              break
+            fi
+            case "${merge_state}" in
+              CLEAN|UNSTABLE|BEHIND|HAS_HOOKS)
+                logf 'mergeStateStatus=%s; attempting merge.' "${merge_state}"
+                break
+                ;;
+            esac
+
+            if [[ "${attempt}" -eq "${poll_attempts}" ]]; then
+              if [[ "${merge_state}" == "BLOCKED" ]]; then
+                post_comment "${MARKER_BLOCKED}" \
+                  "Automerge left this pull request open because GitHub is blocking the merge. Clear the blocker, or re-run Automerge after it clears."
+                notice "Automerge left this pull request open because the merge is blocked."
+              else
+                post_comment "${MARKER_UNKNOWN}" \
+                  "$(printf 'Automerge could not tell yet whether this pull request can merge (status %s). Re-run the Automerge workflow, or push a commit, to try again.' "${merge_state}")"
+                notice "Automerge left this pull request open because mergeability is still unknown."
+              fi
+              exit 0
+            fi
+
+            attempt=$((attempt + 1))
+            sleep "${poll_seconds}"
+          done
+
+          [[ -n "${base}" ]] || fail "Did not resolve the pull request base branch."
+
+          settings="$(gh api "repos/${REPO}")"
+          allow_squash="$(field '.allow_squash_merge' "${settings}")"
+          allow_merge="$(field '.allow_merge_commit' "${settings}")"
+          logf 'Repository merge methods: squash=%s merge=%s.' "${allow_squash}" "${allow_merge}"
+
+          case "${allow_squash}" in
+            true|false) ;;
+            *) fail "Could not read allow_squash_merge from the repository." ;;
+          esac
+          case "${allow_merge}" in
+            true|false) ;;
+            *) fail "Could not read allow_merge_commit from the repository." ;;
+          esac
+
+          # Prefer squash into the base branch (main, for the usual pull request).
+          # If squash is disabled or GitHub rejects it, fall back to a merge commit.
+          method=""
+          if [[ "${allow_squash}" == "true" ]]; then
+            method="squash"
+          elif [[ "${allow_merge}" == "true" ]]; then
+            method="merge"
+          else
+            post_comment "${MARKER_METHOD}" \
+              "Automerge could not merge this pull request because squash and merge commits are both disabled on this repository."
+            notice "Automerge left this pull request open because no merge method is enabled."
+            exit 0
+          fi
+
+          if try_merge "${method}"; then
+            logf 'Merged #%s into %s with %s.' "${PR_NUMBER}" "${base}" "${method}"
+            exit 0
+          fi
+
+          if [[ "${method}" == "squash" && "${allow_merge}" == "true" ]] && is_method_disabled; then
+            log "Squash is unavailable; falling back to a merge commit."
+            if try_merge merge; then
+              logf 'Merged #%s into %s with a merge commit.' "${PR_NUMBER}" "${base}"
+              exit 0
+            fi
+          fi
+
+          pr="$(pr_json)"
+          state="$(field '.state' "${pr}" | upper)"
+          mergeable="$(field '.mergeable' "${pr}" | upper)"
+          merge_state="$(field '.mergeStateStatus' "${pr}" | upper)"
+          base="$(field '.baseRefName' "${pr}")"
+          base="${base%%$'\n'*}"
+
+          if [[ "${state}" != "OPEN" ]]; then
+            logf 'Pull request is %s after the merge attempt.' "${state}"
+            exit 0
+          fi
+
+          if is_permission_error; then
+            fail "Automerge cannot merge because the token was denied access."
+          fi
+
+          if is_conflict_error || [[ "${mergeable}" == "CONFLICTING" || "${merge_state}" == "DIRTY" ]]; then
+            post_comment "${MARKER_CONFLICT}" \
+              "$(printf 'This pull request has merge conflicts with %s, so automerge left it open. Resolve the conflicts and push to retry.' "${base}")"
+            notice "Automerge left this pull request open because it has merge conflicts."
+            exit 0
+          fi
+
+          if is_blocked_error || [[ "${merge_state}" == "BLOCKED" ]]; then
+            post_comment "${MARKER_BLOCKED}" \
+              "Automerge left this pull request open because GitHub is blocking the merge. Clear the blocker, or re-run Automerge after it clears."
+            notice "Automerge left this pull request open because the merge is blocked."
+            exit 0
+          fi
+
+          if is_method_disabled; then
+            post_comment "${MARKER_METHOD}" \
+              "Automerge could not merge this pull request because squash is unavailable and a merge commit could not be created either."
+            notice "Automerge left this pull request open because the merge method is disabled."
+            exit 0
+          fi
+
+          fail "Automerge failed."
