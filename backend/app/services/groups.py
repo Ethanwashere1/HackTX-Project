@@ -125,13 +125,18 @@ def leave_group(db: Session, group_id: str, user: User) -> None:
 
 
 def _person(db: Session, user_id: str) -> dict:
-    """Name, profile summary and contacts. Only call this for group-mates or connections."""
+    """Name, profile summary and contacts. Only call this for group-mates or connections.
+
+    `summary` prefers the AI overview over the interview summary (CONTRACT §1 / team page).
+    """
+    from app.services.profiles import display_summary
+
     user = db.get(User, user_id)
-    summary = db.exec(select(Profile.summary).where(Profile.user_id == user_id)).first()
+    profile = db.exec(select(Profile).where(Profile.user_id == user_id)).first()
     return {
         "user_id": user_id,
         "name": user.name if user else None,
-        "summary": summary,
+        "summary": display_summary(profile),
         "contacts": list_contacts(db, user_id),
     }
 
