@@ -146,6 +146,52 @@ def test_same_request_accepted_twice_at_once(login_as, race, db):
     assert members(db, gid) == {uid(a), uid(b), uid(c)}
 
 
+@pytest.mark.parametrize("limit", [1, 2])
+def test_crossing_structured_accepts_at_once(login_as, race, db, limit):
+    """a and b requested each other and each accepts the other's request at the same moment:
+    one group, both requests accepted with it."""
+    host = login_as("host@utexas.edu", "Hannah Host")
+    a, b = users(login_as, 2)
+    e = make_event(host, max_groups_per_user=limit)
+    join(a, e)
+    join(b, e)
+    r1 = send_ok(a, e, uid(b))["request_id"]
+    r2 = send_ok(b, e, uid(a))["request_id"]
+    results = race([(r1, uid(b)), (r2, uid(a))])
+    assert sorted(results) == ["ok", "request_not_pending"], results
+    groups = db.exec(select(Group).where(Group.event_id == e)).all()
+    assert len(groups) == 1 and members(db, groups[0].id) == {uid(a), uid(b)}
+    for rid in (r1, r2):
+        stored = db.get(Request, rid)
+        assert (stored.status, stored.group_id) == ("accepted", groups[0].id)
+
+
+@pytest.mark.parametrize("limit", [1, 2])
+def test_request_sent_while_the_pair_forms_a_group(login_as, monkeypatch, db, limit):
+    """b sends a crossing request while accepting a's. Whatever the interleaving, the pair ends
+    in one group and no request is left stuck as pending."""
+    slow_down(monkeypatch, "_add_member")
+    host = login_as("host@utexas.edu", "Hannah Host")
+    a, b = users(login_as, 2)
+    e = make_event(host, max_groups_per_user=limit)
+    join(a, e)
+    join(b, e)
+    r1 = send_ok(a, e, uid(b))["request_id"]
+    results = at_once([
+        (uid(b), lambda s, u: svc.accept_request(s, r1, u)),
+        (uid(b), lambda s, u: svc.create_request(
+            s, u, event_id=e, target_type="user", target_id=uid(a), message=None)),
+    ])
+    assert results[0] == "ok" and results[1] in ("ok", "already_in_group"), results
+    for r in db.exec(select(Request).where(Request.event_id == e, Request.status == "pending")).all():
+        assert a.post(f"/api/requests/{r.id}/accept").status_code == 200
+    db.expire_all()
+    groups = db.exec(select(Group).where(Group.event_id == e)).all()
+    assert len(groups) == 1 and members(db, groups[0].id) == {uid(a), uid(b)}
+    for r in db.exec(select(Request).where(Request.event_id == e)).all():
+        assert (r.status, r.group_id) == ("accepted", groups[0].id)
+
+
 # --- informal events: one connection per pair ----------------------------------------------------
 
 def informal_pair(login_as):
