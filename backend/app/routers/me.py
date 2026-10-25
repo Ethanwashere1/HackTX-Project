@@ -8,7 +8,7 @@ from sqlmodel import delete
 
 from app.auth.deps import CurrentUser, DbSession
 from app.models import ContactMethod
-from app.services.users import list_contacts, me_payload
+from app.services.users import list_contacts, me_payload, my_profile_payload
 
 router = APIRouter(prefix="/api/me", tags=["me"])
 
@@ -40,6 +40,11 @@ class ContactsBody(BaseModel):
 @router.get("")
 def get_me(user: CurrentUser, db: DbSession):
     return me_payload(db, user)
+
+
+@router.get("/profile")
+def get_my_profile(user: CurrentUser, db: DbSession):
+    return my_profile_payload(db, user)
 
 
 @router.put("/contacts")

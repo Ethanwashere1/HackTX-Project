@@ -419,7 +419,7 @@ def test_feed_visible_only_to_approved_members(admin, login_as):
         assert_error(c.get(f"/api/orgs/{org_id}/feed"), 403, "not_org_member")
         assert_error(c.post("/api/events", json=informal(org_id=org_id)), 403, "not_org_member")
     for c in (admin, member):
-        assert c.get(f"/api/orgs/{org_id}/feed").json() == {"org_id": org_id, "events": []}
+        assert c.get(f"/api/orgs/{org_id}/feed").json() == {"org_id": org_id, "name": "UT Austin", "events": []}
 
 
 def test_feed_lists_upcoming_org_events(admin, login_as):

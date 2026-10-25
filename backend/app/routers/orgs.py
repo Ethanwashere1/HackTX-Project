@@ -92,6 +92,12 @@ def create_org(body: OrgCreate, user: CurrentUser, db: DbSession):
     return {"org_id": org.id, "verification": org.verification}
 
 
+@router.get("/{org_id}")
+def get_org(org_id: str, user: CurrentUser, db: DbSession):
+    """One org, shaped like an item of GET /api/orgs; 404 unless it would be listed there."""
+    return svc.visible_org_payload(db, org_id, user)
+
+
 @router.patch("/{org_id}")
 def update_org(org_id: str, body: OrgPatch, user: CurrentUser, db: DbSession):
     """Change settings (admin). Pending requests the new settings accept are approved."""
