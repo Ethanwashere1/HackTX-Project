@@ -1,5 +1,5 @@
 # SquadUp API Contract — DRAFT v1.0-pre
-_Status: draft, 2026-10-24, rewritten for the new product spec. Sections 8–9 (backend ↔ agents, interview WebSocket) are **approved by the Gemini dev**; sections 1–7 await the frontend devs. Changes go through the planner and get a changelog line at the bottom._
+_Status: draft, 2026-10-25, rewritten for the new product spec. Sections 8–9 (backend ↔ agents, interview WebSocket) are **approved by the Gemini dev**; sections 1–7 await the frontend devs. AI feature endpoints in §1 (`/api/me/profile`), §3 (`/api/question-suggestions`), and §8 (`/profile-overview`, `/generate-questions`, enriched `/recommend`) are **planner-proposed** — Gemini and frontend should confirm before calling M1/M2 done. Changes go through the planner and get a changelog line at the bottom._
 
 ## Conventions
 - **Services:**
@@ -33,6 +33,20 @@ _Status: draft, 2026-10-24, rewritten for the new product spec. Sections 8–9 (
  "contacts": [{"kind": "discord", "value": "ana#1234"}]}
 ```
 - **`PUT /api/me/contacts`:** body `{"contacts": [{"kind": "phone", "value": "+1…"}]}` (max 20, replaces the whole list). Returns 200 `{"contacts": [...]}`. Contacts are visible only to the user's group-mates and connections.
+- **`GET /api/me/profile`:** the signed-in user's shared profile (one per person across events).
+```json
+{"user_id": "usr_a1", "name": "Ana Ruiz", "email": "ana@utexas.edu",
+ "overview": "Frontend-leaning builder who wants a climate hack with a chill but ambitious team.",
+ "summary": "Loves climate apps; prefers pairing; available all weekend.",
+ "traits": {"working_style": "pairing", "ambition": "win", "topics": "climate,react",
+            "group_need": "hackathon teammates"},
+ "contacts": [{"kind": "discord", "value": "ana#1234"}],
+ "socials": [{"kind": "github", "value": "ana-ruiz"}]}
+```
+  - `overview` is the AI-generated blurb from questionnaire answers + social notes + interview (null until generated).
+  - `summary` is the interview-only summary (null if the user skipped the interview).
+  - `traits` merges interview traits with overview traits (topics, group_need, working style, etc.).
+  - Recommendations and team pages prefer `overview` when present, else `summary`.
 - **Login errors:**
   - `/login` returns 503 `oauth_not_configured` while the Google credentials are unset.
   - On the callback, a missing, expired (10 min) or mismatched `state` returns 400 `invalid_oauth_state`; a missing `code` returns 400 `bad_request`; a Google token or profile failure (including a non-JSON response) returns 502 `oauth_failed`; an unverified Google email returns 403 `email_not_verified`.
@@ -126,11 +140,29 @@ Endpoints:
 - Event members only: 403 `forbidden` before joining; 409 `interview_disabled` when the event has `interview_enabled: false`.
 - Each call issues a new token, valid for `expires_in` seconds. The backend stores only its hash.
 
+**`POST /api/question-suggestions`** (host AI assist for the questionnaire builder; session auth)
+```json
+{"name": "HackTX team-up", "type": "structured", "tone": "casual",
+ "description": "Find your hackathon team",
+ "existing_questions": [{"text": "What role do you want?", "kind": "single_choice",
+                         "options": ["frontend", "backend", "design", "ml"]}],
+ "count": 3, "hint": "availability and what they want to build"}
+// 200
+{"questions": [{"text": "How many hours can you commit this weekend?", "kind": "single_choice",
+                "options": ["under 8", "8–16", "all weekend"], "required": true},
+               {"text": "What do you want to build?", "kind": "text", "options": null, "required": false}]}
+```
+- The backend proxies to agents `POST /generate-questions` (section 8). It does **not** create an event; the host still POSTs `/api/events` with the chosen questions.
+- `count` defaults to 3 (1–10). `existing_questions` and `hint` are optional. `name`/`type`/`tone` should match the create-event form so far.
+- Returned questions use the same `kind` enum as create-event (`text | single_choice | multi_choice | number`). `single_choice` / `multi_choice` include `options`; `text` / `number` use `options: null`.
+- On agents failure or timeout (10 s): 502 `agents_unavailable`. Frontend should keep the manual builder usable.
+
 ## 4. Recommendations
 **`GET /api/events/{event_id}/recommendations?limit=10`** (members only)
 ```json
 {"ranked_by": "gemini",
- "people": [{"user_id": "usr_b2", "name": "Ben Li", "summary": "Backend dev, wants to win",
+ "people": [{"user_id": "usr_b2", "name": "Ben Li",
+             "summary": "Backend dev who wants to win; overlapping climate + API interests.",
              "score": 0.87, "reason": "You'd cover frontend and he covers backend; both want to ship a full demo."}],
  "groups": [{"group_id": "grp_1", "name": "Team Nebula", "size": 2, "max_size": 4,
              "members": [{"user_id": "usr_c3", "name": "Cara"}],
@@ -138,8 +170,10 @@ Endpoints:
 ```
 - **Field values:**
   - `ranked_by` is `gemini`, or `similarity` when the agent rerank fails, in which case `reason` is null.
+  - `people[].summary` is the candidate's `overview` when present, else their interview `summary`.
   - `groups` is always `[]` for informal events.
 - **Excluded from results:** the viewer, people already in the viewer's groups, groups the viewer is in, full groups, and users or groups the viewer declined or was declined by. When the viewer has reached `max_groups_per_user`, `groups` is `[]`.
+- **Matching signals:** the backend builds each candidate's (and the viewer's) `profile_text` from questionnaire answers, social notes, interview summary/traits, and the AI `overview`. Snowflake/pgvector rank by embedding similarity; agents `/recommend` then reranks using those texts plus optional `traits` / `topic_signals` / `group_need` (section 8).
 
 ## 5. Requests and consent
 **`POST /api/requests`**
@@ -210,20 +244,63 @@ The agents service calls this when the WebSocket opens. It returns 401 if the to
  "input_mode": "voice"}
 // 200 → {"ok": true}
 ```
-The backend stores the transcript and summary on the user's profile, then re-embeds the user's event profiles.
+The backend stores the transcript and interview `summary`/`traits` on the user's profile, then asynchronously regenerates the profile `overview` via `POST /profile-overview` and re-embeds the user's event profiles.
+
+### Backend → agents: POST /profile-overview
+Builds a short profile overview from questionnaire + socials + interview. Called by the backend after join, socials update, interview summary, or SerpAPI notes change (not on the hot request path for recommendations).
+```json
+// request
+{"user": {"user_id": "usr_a1", "name": "Ana"},
+ "answers": {"q_1": "frontend", "q_2": "climate apps"},
+ "fields": {"skills": ["react", "figma"], "experience_level": "intermediate"},
+ "social_notes": "GitHub: climate-dashboard, React contributor",
+ "interview_summary": "Loves climate apps; prefers pairing; available all weekend.",
+ "interview_traits": {"working_style": "pairing", "ambition": "win", "availability": "all weekend"},
+ "event": {"event_id": "evt_h1", "name": "HackTX team-up", "type": "structured", "tone": "casual"}}
+// 200
+{"overview": "Frontend-leaning builder focused on climate apps; wants a pairing-friendly hackathon team for the weekend.",
+ "traits": {"working_style": "pairing", "ambition": "win", "availability": "all weekend",
+            "topics": "climate,react,figma", "group_need": "hackathon teammates"}}
+```
+- `event` is optional context (tone / type); overview is still stored on the shared user profile.
+- `answers` / `fields` may be empty if the user has not joined an event yet (then socials + interview alone drive the overview).
+- Timeout 15 s. On failure the backend keeps the previous overview (or leaves it null); join / interview still succeed.
+- Errors: 401 `unauthenticated`, 422 `validation_error`, 502 `overview_failed`, 503 `gemini_not_configured`.
+
+### Backend → agents: POST /generate-questions
+AI assist for the host questionnaire builder. Proxied by `POST /api/question-suggestions`.
+```json
+// request
+{"event": {"name": "HackTX team-up", "type": "structured", "tone": "casual", "description": "…"},
+ "existing_questions": [{"text": "What role do you want?", "kind": "single_choice",
+                         "options": ["frontend", "backend", "design", "ml"]}],
+ "count": 3, "hint": "availability and what they want to build"}
+// 200
+{"questions": [{"text": "How many hours can you commit this weekend?", "kind": "single_choice",
+                "options": ["under 8", "8–16", "all weekend"], "required": true},
+               {"text": "What do you want to build?", "kind": "text", "options": null, "required": false}]}
+```
+- Must not duplicate `existing_questions` text. Prefer kinds that fit the event tone.
+- Timeout 10 s. Errors: 401 `unauthenticated`, 422 `validation_error`, 502 `quizgen_failed`, 503 `gemini_not_configured`.
 
 ### Backend → agents: POST /recommend
 ```json
 // request
 {"event": {"event_id": "evt_h1", "type": "structured", "tone": "casual", "description": "…"},
- "viewer": {"user_id": "usr_a1", "profile_text": "…"},
- "candidates": [{"candidate_type": "user", "id": "usr_b2", "profile_text": "…", "similarity": 0.83},
-                {"candidate_type": "group", "id": "grp_1", "profile_text": "…", "similarity": 0.79}],
+ "viewer": {"user_id": "usr_a1", "profile_text": "…",
+            "traits": {"working_style": "pairing", "topics": "climate,react", "group_need": "hackathon teammates"},
+            "topic_signals": ["climate", "react"], "group_need": "hackathon teammates"},
+ "candidates": [{"candidate_type": "user", "id": "usr_b2", "profile_text": "…", "similarity": 0.83,
+                 "traits": {"working_style": "async", "topics": "climate,apis"},
+                 "topic_signals": ["climate", "apis"], "group_need": "hackathon teammates"},
+                {"candidate_type": "group", "id": "grp_1", "profile_text": "…", "similarity": 0.79,
+                 "traits": {}, "topic_signals": ["design"], "group_need": null}],
  "limit": 10}
 // 200
 {"results": [{"candidate_type": "user", "id": "usr_b2", "score": 0.87, "reason": "…"}]}
 ```
 - The response may only contain IDs from `candidates`.
+- `traits`, `topic_signals`, and `group_need` are optional but preferred. The Recommender must weigh: overlapping topics / prior similar interests, complementary skills, shared `group_need`, and traits that suggest they work well together (working style, ambition, availability) — not only raw text similarity.
 - Timeout is 20 s. On error, timeout or an invalid response, the backend returns the similarity order with `ranked_by: "similarity"`.
 
 ### GET /health (both services)
@@ -265,7 +342,8 @@ The browser never talks to Gemini directly, and the backend never handles audio.
 
 ## Error codes
 `unauthenticated` (401), `forbidden` (403), `not_org_member` (403), `not_org_admin` (403), `not_found` (404), `validation_error` (422), `invalid_answers` (422), `invalid_roster` (422), `already_joined` (409), `already_member` (409), `already_in_group` (409), `group_full` (409), `group_limit_reached` (409), `group_limit_per_user` (409), `request_not_pending` (409), `interview_disabled` (409), `internal_error` (500).
-Auth and generic: `bad_request` (400), `invalid_oauth_state` (400), `email_not_verified` (403), `method_not_allowed` (405), `account_conflict` (409), `oauth_failed` (502), `oauth_not_configured` (503).
+Auth and generic: `bad_request` (400), `invalid_oauth_state` (400), `email_not_verified` (403), `method_not_allowed` (405), `account_conflict` (409), `oauth_failed` (502), `agents_unavailable` (502), `oauth_not_configured` (503).
+Agents-only (returned by the agents service to the backend): `overview_failed` (502), `quizgen_failed` (502), `recommender_failed` (502), `gemini_not_configured` (503).
 
 ## Changelog
 - v1.0-pre (2026-10-24): full rewrite for the new product spec (OAuth accounts, orgs and feed, structured and informal events, recommendations with mutual consent, chat and calls, team pages). Replaces v0.2, which was organizer-generated teams with modes and `/match`.
@@ -273,3 +351,4 @@ Auth and generic: `bad_request` (400), `invalid_oauth_state` (400), `email_not_v
 - v1.0-pre.2 (2026-10-24): section 1 clarifications from the backend M0 build: `PUT /api/me/contacts` response, OAuth login error codes and the cancel redirect, `next` restricted to relative paths, and the dev-only `POST /api/auth/dev-login` (local/test only, behind `DEV_LOGIN=1`). Added the matching error codes.
 - v1.0-pre.3 (2026-10-24): from the backend M0 review fixes and the M1 events build. Section 1: a missing `code` on the callback is 400 `bad_request`; email linking never overrides a different Google account (409 `account_conflict`). Section 2: orgs get `discoverable` (default true). Section 3: the full `GET /api/events/{id}` body (adds `org_id`, `created_at`, `share_url` and the event settings), create and join validation rules, 409 `already_joined`, 403 `not_org_member` for org events, and the interview endpoint's member-only rule plus 409 `interview_disabled`. New error codes `bad_request`, `account_conflict`, `interview_disabled`.
 - v1.0-pre.4 (2026-10-24): one profile per person. A user's profile (socials, social notes, interview summary) is shared across all their events; each event keeps its own answers and match text. Section 3: joining creates or updates that shared profile. Section 8: the interview summary is stored on the user's profile and re-embeds all of the user's event profiles. No request or response shapes changed.
+- v1.0-pre.5 (2026-10-25): AI feature contract. Section 1: `GET /api/me/profile` with `overview`, interview `summary`, `traits`, contacts, socials. Section 3: `POST /api/question-suggestions` (host questionnaire AI assist). Section 4: recommendations prefer overview text; matching signals documented. Section 8: `POST /profile-overview`, `POST /generate-questions`, enriched `/recommend` (`traits`, `topic_signals`, `group_need`); interview summary triggers overview regen. Error codes `agents_unavailable`, `overview_failed`, `quizgen_failed`, `recommender_failed`, `gemini_not_configured`.
