@@ -13,11 +13,13 @@ from tests.test_review_fixes import make_settings
 @pytest.fixture
 def hooks(monkeypatch):
     """Records the background hook calls instead of running them."""
-    calls = {"text_changed": [], "social_lookup": []}
+    calls = {"text_changed": [], "social_lookup": [], "overview": []}
     monkeypatch.setattr(profile_svc, "on_member_text_changed",
                         lambda ids: calls["text_changed"].append(sorted(ids)))
     monkeypatch.setattr(profile_svc, "schedule_social_lookup",
                         lambda uid, socials: calls["social_lookup"].append((uid, socials)))
+    monkeypatch.setattr(profile_svc, "schedule_overview_refresh",
+                        lambda uid, event_id=None: calls["overview"].append((uid, event_id)))
     return calls
 
 
@@ -38,6 +40,7 @@ def test_profile_is_shared_across_events_and_socials_merge(login_as, db, hooks):
     assert hooks["text_changed"] == [[m1.id]]
     assert hooks["social_lookup"] == [(uid, [{"kind": "github", "value": "ana-ruiz"},
                                              {"kind": "instagram", "value": "@ana"}])]
+    assert hooks["overview"] == [(uid, e1)]
 
     # The second join replaces the github handle, keeps instagram, and adds discord.
     socials = [{"kind": "github", "value": "ana-new"}, {"kind": "discord", "value": "ana#1"}]
@@ -56,6 +59,7 @@ def test_profile_is_shared_across_events_and_socials_merge(login_as, db, hooks):
     assert "react, figma" in m1.profile_text and "Study buddies" in m2.profile_text
     assert hooks["text_changed"][1] == sorted([m1.id, m2.id])
     assert hooks["social_lookup"][1] == (uid, socials)
+    assert hooks["overview"][1] == (uid, e2)
 
 
 def test_join_without_new_socials_only_touches_that_event(login_as, db, hooks):
@@ -67,15 +71,17 @@ def test_join_without_new_socials_only_touches_that_event(login_as, db, hooks):
     uid = ana.user["user_id"]
     assert hooks["text_changed"] == [[member(db, e1, uid).id], [member(db, e2, uid).id]]
     assert hooks["social_lookup"] == []
+    assert hooks["overview"] == [(uid, e1), (uid, e2)]
     assert db.exec(select(Profile)).one().socials == []
 
 
 def test_failing_hooks_never_fail_the_join(login_as, db, monkeypatch):
-    def boom(*args):
+    def boom(*args, **kwargs):
         raise RuntimeError("embedding service down")
 
     monkeypatch.setattr(profile_svc, "on_member_text_changed", boom)
     monkeypatch.setattr(profile_svc, "schedule_social_lookup", boom)
+    monkeypatch.setattr(profile_svc, "schedule_overview_refresh", boom)
     c = login_as()
     event_id = create(c, structured())
     assert c.post(f"/api/events/{event_id}/join", json=good_join(c, event_id)).status_code == 201
@@ -116,7 +122,9 @@ def test_get_or_create_profile_is_idempotent(login_as, db):
     again = profile_svc.get_or_create_profile(db, uid, lock=True)
     db.commit()
     assert first.id == again.id and first.id.startswith("prf_")
-    assert (again.socials, again.traits, again.transcript, again.summary) == ([], {}, [], None)
+    assert (again.socials, again.traits, again.transcript, again.summary, again.overview) == (
+        [], {}, [], None, None
+    )
     assert len(db.exec(select(Profile)).all()) == 1
 
 
