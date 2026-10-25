@@ -68,7 +68,7 @@ _Last updated: 2026-10-24 (HackTX weekend). **Pivoted to the new product spec.**
 - **Frontend devs (`frontend/`):** all UI, plus all unit and regression testing of the web app (frontend). Backend tests stay with the Claude tester.
 
 ## Contract summary
-See [docs/CONTRACT.md](docs/CONTRACT.md) (DRAFT v1.0-pre.5). It covers:
+See [docs/CONTRACT.md](docs/CONTRACT.md) (DRAFT v1.0-pre.6). It covers:
 - the session-cookie auth flow
 - `/api` endpoints for orgs, events, joining, recommendations, requests, threads/chat/call and groups
 - `/internal` endpoints, `POST /recommend` and the interview WebSocket between the backend and agents
