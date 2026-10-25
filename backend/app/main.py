@@ -16,6 +16,7 @@ from app.routers import (
     internal,
     me,
     orgs,
+    question_suggestions,
     recommendations,
     requests,
     threads,
@@ -39,6 +40,7 @@ def create_app() -> FastAPI:
     app.include_router(auth.router)
     app.include_router(me.router)
     app.include_router(events.router)
+    app.include_router(question_suggestions.router)
     app.include_router(requests.router)
     app.include_router(threads.router)
     app.include_router(groups.router)

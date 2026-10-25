@@ -86,6 +86,10 @@ def _isolate(database_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[Non
     monkeypatch.setattr(settings, "internal_api_key", "test-internal-key")
     monkeypatch.setattr(settings, "agents_url", "http://agents.test")
     monkeypatch.setattr(settings, "agents_ws_url", "")
+    # Overview regen hits the network; default off so joins stay fast. Opt in in AI tests.
+    from app.services import profiles as profile_svc
+
+    monkeypatch.setattr(profile_svc, "schedule_overview_refresh", lambda *a, **k: None)
     yield
     tables = ", ".join(f'"{t.name}"' for t in SQLModel.metadata.sorted_tables)
     with dbmod.get_engine().begin() as conn:

@@ -1,4 +1,4 @@
-"""Contract section 1: the signed-in user and their contact methods."""
+"""Contract section 1: the signed-in user, contact methods, and shared profile."""
 
 from typing import Literal
 
@@ -8,6 +8,7 @@ from sqlmodel import delete
 
 from app.auth.deps import CurrentUser, DbSession
 from app.models import ContactMethod
+from app.services import profiles as profile_svc
 from app.services.users import list_contacts, me_payload
 
 router = APIRouter(prefix="/api/me", tags=["me"])
@@ -37,6 +38,23 @@ class ContactsBody(BaseModel):
 @router.get("")
 def get_me(user: CurrentUser, db: DbSession):
     return me_payload(db, user)
+
+
+@router.get("/profile")
+def get_my_profile(user: CurrentUser, db: DbSession):
+    """Shared person profile: overview, interview summary/traits, contacts, socials."""
+    profile = profile_svc.get_or_create_profile(db, user.id)
+    db.commit()  # persist an empty profile row if this was the first touch
+    return {
+        "user_id": user.id,
+        "name": user.name,
+        "email": user.email,
+        "overview": profile.overview,
+        "summary": profile.summary,
+        "traits": dict(profile.traits) if profile.traits else {},
+        "contacts": list_contacts(db, user.id),
+        "socials": list(profile.socials) if profile.socials else [],
+    }
 
 
 @router.put("/contacts")
