@@ -1,11 +1,13 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api/client";
 import type { EventDetail } from "../api/types";
+import { useAuth } from "../auth/AuthContext";
 
 export function JoinEventPage() {
   const { eventId = "evt_hacktx" } = useParams();
   const navigate = useNavigate();
+  const { me } = useAuth();
   const [event, setEvent] = useState<EventDetail | null>(null);
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [skills, setSkills] = useState("react, figma");
@@ -55,10 +57,29 @@ export function JoinEventPage() {
 
   if (!event) return <div className="su-page">{error ?? "Loading…"}</div>;
 
+  const isHost = Boolean(me && event.host.user_id === me.user_id);
+  if (isHost) {
+    return (
+      <div className="su-page su-fade-up">
+        <h1 className="su-page-title">You’re the host</h1>
+        <p className="su-page-sub">
+          Hosts own this event and can’t join it as a participant. Share the link so others can join
+          and form squads.
+        </p>
+        <Link className="su-btn su-btn-primary" to={`/events/${event.event_id}`}>
+          Back to event
+        </Link>
+      </div>
+    );
+  }
+
   return (
     <div className="su-page su-fade-up">
       <h1 className="su-page-title">Join {event.name}</h1>
-      <p className="su-page-sub">Answer a few questions so matching has something real to work with.</p>
+      <p className="su-page-sub">
+        Answer {event.questions.length} question{event.questions.length === 1 ? "" : "s"} so matching
+        has something real to work with.
+      </p>
 
       <form className="su-card" style={{ padding: "1.25rem", maxWidth: 720 }} onSubmit={(e) => void onSubmit(e)}>
         {event.questions.map((q) => (

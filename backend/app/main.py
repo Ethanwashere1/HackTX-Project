@@ -9,6 +9,7 @@ from app.config import get_settings
 from app.errors import install_error_handlers
 from app.routers import (
     auth,
+    enrichment,
     events,
     groups,
     health,
@@ -43,6 +44,7 @@ def create_app() -> FastAPI:
     app.include_router(groups.router)
     app.include_router(orgs.router)
     app.include_router(recommendations.router)
+    app.include_router(enrichment.router)
     app.include_router(internal.router)
     if settings.is_dev_login_enabled():
         logging.getLogger(__name__).warning("DEV_LOGIN is enabled: POST /api/auth/dev-login is open")

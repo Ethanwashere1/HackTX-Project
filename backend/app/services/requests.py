@@ -67,7 +67,11 @@ def create_request(
         if group is None or group.event_id != event.id:
             raise AppError(404, "not_found", "Group not found in this event")
         if is_group_member(db, group.id, user.id):
-            raise AppError(409, "already_in_group", "You're already in this group")
+            raise AppError(
+                409,
+                "already_in_group",
+                "You're already in this squad — owners and members can't join again",
+            )
         participants = [user.id, *group_member_ids(db, group.id)]
 
     thread = create_thread(db, event_id=event.id, kind="request", user_ids=participants)

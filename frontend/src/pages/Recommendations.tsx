@@ -38,7 +38,7 @@ export function RecommendationsPage() {
 
   return (
     <div className="su-page su-fade-up">
-      <h1 className="su-page-title">People and group recommendations</h1>
+      <h1 className="su-page-title">People and squad recommendations</h1>
       <p className="su-page-sub">
         Ranked with reasons ({data.ranked_by}). Send a request — both sides must accept.
       </p>
@@ -48,7 +48,7 @@ export function RecommendationsPage() {
           <article key={rec.id} className="su-card" style={{ padding: "1.2rem" }}>
             <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem" }}>
               <span className={`su-badge ${rec.candidate_type === "group" ? "su-badge-warm" : "su-badge-teal"}`}>
-                {rec.candidate_type}
+                {rec.candidate_type === "group" ? "squad" : "person"}
               </span>
               <span style={{ color: "var(--su-text-muted)", fontSize: "0.8rem" }}>
                 {(rec.score * 100).toFixed(0)}% match

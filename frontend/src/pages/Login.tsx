@@ -33,14 +33,14 @@ export function LoginPage() {
         </div>
 
         <div className="login-content">
-          <span className="su-badge su-badge-teal">Teams · Events · Connections</span>
+          <span className="su-badge su-badge-teal">Squads · Events · Connections</span>
           <h1>
             Find your squad.
             <br />
             Show up together.
           </h1>
           <p className="login-lede">
-            SquadUp connects UT Austin students across structured team events and
+            SquadUp connects UT Austin students across structured squad events and
             casual 1:1 meetups — matched by mutual interest, not random chance.
           </p>
 
@@ -67,7 +67,7 @@ export function LoginPage() {
             <span className="login-ut">UT</span>
             <div>
               <strong>UT Austin — Campus community</strong>
-              <p>Hackathon teams, study buddies, photo walks & more.</p>
+              <p>Hackathon squads, study buddies, photo walks & more.</p>
             </div>
             <span className="su-badge su-badge-teal">Active</span>
           </div>
@@ -79,7 +79,7 @@ export function LoginPage() {
                 <span>1</span> Sign in and complete your interest profile
               </li>
               <li>
-                <span>2</span> Browse events — team challenges or 1:1 meetups
+                <span>2</span> Browse events — squad challenges or 1:1 meetups
               </li>
               <li>
                 <span>3</span> Get matched — both sides accept before anything starts
@@ -105,7 +105,7 @@ export function LoginPage() {
         </div>
         <div className="login-story-body">
           <div className="login-pills">
-            <span className="su-badge su-badge-warm">Team events</span>
+            <span className="su-badge su-badge-warm">Squad events</span>
             <span className="su-badge su-badge-teal">1:1 connections</span>
             <span className="su-badge su-badge-soft">Casual meetups</span>
           </div>
@@ -115,7 +115,7 @@ export function LoginPage() {
             Every kind of event.
           </h2>
           <p>
-            From hackathon teams to study sessions to Sunday coffee — SquadUp
+            From hackathon squads to study sessions to Sunday coffee — SquadUp
             matches you with people worth meeting, across every format.
           </p>
           <div className="login-preview">
@@ -125,7 +125,7 @@ export function LoginPage() {
               <span>AR</span>
             </div>
             <div>
-              <strong>Pixel Pioneers — HackTX Team</strong>
+              <strong>Pixel Pioneers — HackTX Squad</strong>
               <p>3 of 4 members matched · Backend, ML & product</p>
             </div>
             <em>1 spot left</em>

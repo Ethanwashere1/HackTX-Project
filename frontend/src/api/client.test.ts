@@ -25,6 +25,8 @@ describe("api client (mocks)", () => {
     const feed = await api.orgFeed("org_ut");
     expect(feed.events.length).toBeGreaterThan(0);
     const recs = await api.recommendations("evt_hacktx");
-    expect(recs.results[0]?.name).toBe("Pixel Pioneers");
+    expect(recs.results.map((r) => r.name)).toContain("Ben Li");
+    // Own squad (Pixel Pioneers) is not recommended for re-join
+    expect(recs.results.map((r) => r.id)).not.toContain("grp_pixel");
   });
 });

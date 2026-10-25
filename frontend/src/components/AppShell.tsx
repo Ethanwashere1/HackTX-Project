@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import { Avatar } from "./Avatar";
 import "./AppShell.css";
@@ -7,16 +7,16 @@ import "./AppShell.css";
 const nav = [
   { to: "/orgs/org_ut", label: "Discover", short: "Home", end: true },
   { to: "/events/evt_hacktx", label: "My events", short: "Events" },
-  { to: "/groups/grp_pixel", label: "My teams", short: "Teams" },
+  { to: "/groups/grp_pixel", label: "My squads", short: "Squads" },
   { to: "/requests", label: "Requests", short: "Inbox", badge: 2 },
   { to: "/threads/thr_1", label: "Messages", short: "Chat" },
 ];
 
 export function AppShell() {
   const { me, logout } = useAuth();
-  const navigate = useNavigate();
   const location = useLocation();
   const [menuOpen, setMenuOpen] = useState(false);
+  const onOrgFeed = /^\/orgs\/[^/]+$/.test(location.pathname) && !location.pathname.endsWith("/new");
 
   useEffect(() => {
     setMenuOpen(false);
@@ -54,17 +54,14 @@ export function AppShell() {
           </button>
         </div>
 
-        <button
-          type="button"
-          className="shell-org"
-          onClick={() => navigate("/orgs/org_ut")}
-        >
+        {/* Context chip only — not a second "active" nav twin of Discover */}
+        <div className="shell-org" aria-label="Current organization">
           <span className="shell-org-mono">UT</span>
           <span className="shell-org-copy">
             <strong>UT Austin</strong>
             <small>Campus community</small>
           </span>
-        </button>
+        </div>
 
         <nav className="shell-nav" aria-label="Main">
           {nav.map((item) => (
@@ -84,8 +81,21 @@ export function AppShell() {
 
         <div className="shell-spaces">
           <p>Your spaces</p>
-          <NavLink to="/orgs/org_ut">UT Austin</NavLink>
-          <NavLink to="/orgs/new">+ Create organization</NavLink>
+          {/* Plain Link — avoids a second aria-current / active twin of Discover */}
+          <Link
+            to="/orgs/org_ut"
+            className={`shell-space-link${onOrgFeed ? " is-current-space" : ""}`}
+          >
+            UT Austin
+          </Link>
+          <NavLink
+            to="/orgs/new"
+            className={({ isActive }) =>
+              `shell-space-link${isActive ? " is-current-space" : ""}`
+            }
+          >
+            + Create organization
+          </NavLink>
         </div>
 
         <div className="shell-foot">

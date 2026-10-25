@@ -12,7 +12,7 @@ export function InterviewPage() {
   const [lines, setLines] = useState<Line[]>([
     {
       role: "interviewer",
-      text: "Hey Maya! Tell me what you want to build this weekend — and what kind of teammates help you do your best work.",
+      text: "Hey Maya! Tell me what you want to build this weekend — and what kind of squadmates help you do your best work.",
     },
   ]);
   const timer = useRef<number | null>(null);

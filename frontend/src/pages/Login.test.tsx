@@ -25,7 +25,7 @@ describe("LoginPage", () => {
     render(<App />);
     await user.click(await screen.findByRole("button", { name: /continue with google/i }));
     await waitFor(() => {
-      expect(screen.getByText(/HackTX team-up/i)).toBeInTheDocument();
+      expect(screen.getByText(/HackTX squad-up/i)).toBeInTheDocument();
     });
   });
 });
