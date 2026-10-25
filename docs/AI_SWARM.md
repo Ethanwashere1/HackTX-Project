@@ -1,6 +1,6 @@
 # ai-swarm — run / build / test for SquadUp product AI
 
-_Status: planned (2026-10-25). Scaffold under the `uiux-swarm/` pattern as `ai-swarm/`. This doc is the build brief; do not put product Gemini logic here — that stays in `agents/`._
+_Status: scaffolded (2026-10-25) under `ai-swarm/` mirroring `uiux-swarm/`. This doc is the build brief; do not put product Gemini logic here — that stays in `agents/`._
 
 ## Decision
 

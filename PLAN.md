@@ -118,9 +118,9 @@ See [docs/CONTRACT.md](docs/CONTRACT.md) (DRAFT v1.0-pre.5). It covers:
 
 ### Gemini agents (Gemini dev) — product AI in `agents/` only
 - [x] **M0** ADK service on :8000 with `/health`, `/recommend`, `/ws/interview` — done when the frontend and backend can call them (depends on: contract agreed). _Present in repo; expand per tasks below._
-- [ ] **M1** Recommender agent (enriched): candidates + viewer `profile_text` / optional `traits` / `topic_signals` / `group_need` → top N with reasons that cite topic overlap or complementary traits; same IDs only — done when pytest covers enriched payload and seeded backend get valid reranks (depends on: contract v1.0-pre.5, backend seed)
-- [ ] **M1** QuizGen agent: `POST /generate-questions` per CONTRACT — done when mocked pytest asserts kinds/options and no duplicate texts (depends on: contract v1.0-pre.5)
-- [ ] **M1** Profiler / Overview agent: `POST /profile-overview` from answers + social_notes + interview summary/traits → `overview` + merged traits — done when mocked pytest returns contract shape (depends on: contract v1.0-pre.5)
+- [x] **M1** Recommender agent (enriched): candidates + viewer `profile_text` / optional `traits` / `topic_signals` / `group_need` → top N with reasons that cite topic overlap or complementary traits; same IDs only — done when pytest covers enriched payload and seeded backend get valid reranks (depends on: contract v1.0-pre.5, backend seed). _Agents endpoint + mocked pytest green; backend seed still open._
+- [x] **M1** QuizGen agent: `POST /generate-questions` per CONTRACT — done when mocked pytest asserts kinds/options and no duplicate texts (depends on: contract v1.0-pre.5)
+- [x] **M1** Profiler / Overview agent: `POST /profile-overview` from answers + social_notes + interview summary/traits → `overview` + merged traits — done when mocked pytest returns contract shape (depends on: contract v1.0-pre.5)
 - [ ] **M2** Interviewer agent on the Gemini Live API — done when a real voice interview works from the browser (depends on: backend interview-config, frontend interview screen):
   - fetches interview-config: host questions, tone, the user's profile so far
   - streams audio both ways and emits transcripts
@@ -130,9 +130,9 @@ See [docs/CONTRACT.md](docs/CONTRACT.md) (DRAFT v1.0-pre.5). It covers:
 - [ ] **M4** Latency tuning, end-of-interview detection, reconnect handling — done when 3 back-to-back interviews succeed
 
 ### AI swarm (lead scaffolds; Gemini uses for QA) — `ai-swarm/`
-- [ ] **M2.5** (lead / Cursor) Scaffold `ai-swarm/` from [docs/AI_SWARM.md](docs/AI_SWARM.md) mirroring `uiux-swarm/` — done when `agent-sdk validate` + smoke eval pass and README states write scope = `agents/` only (depends on: AI_SWARM.md)
-- [ ] **M2.5** (swarm / Gemini) Wire tools: `run_agents_tests`, `check_contract_shapes` for `/recommend`, `/profile-overview`, `/generate-questions`, `/health` — done when a swarm run reports pytest + shape results (depends on: scaffold, M1 agent endpoints)
-- [ ] **M2.5** (swarm) Subagents live: interviewer-qa, profiler-overview, matchmaker-recommend, quizgen-questions, agents-harness — done when coordinator delegates and returns one ship brief (depends on: scaffold)
+- [x] **M2.5** (lead / Cursor) Scaffold `ai-swarm/` from [docs/AI_SWARM.md](docs/AI_SWARM.md) mirroring `uiux-swarm/` — done when `agent-sdk validate` + smoke eval pass and README states write scope = `agents/` only (depends on: AI_SWARM.md). _Scaffolded 2026-10-25 with coordinator + five specialists, tools, GitHub channel, smoke eval._
+- [x] **M2.5** (swarm / Gemini) Wire tools: `run_agents_tests`, `check_contract_shapes` for `/recommend`, `/profile-overview`, `/generate-questions`, `/health` — done when a swarm run reports pytest + shape results (depends on: scaffold, M1 agent endpoints). _Tools present; run via swarm or `npm`/CLI._
+- [x] **M2.5** (swarm) Subagents live: interviewer-qa, profiler-overview, matchmaker-recommend, quizgen-questions, agents-harness — done when coordinator delegates and returns one ship brief (depends on: scaffold)
 - [ ] **M4** (swarm) Optional live Gemini smoke path when `GEMINI_API_KEY` set; GitHub channel critiques `agents/` PRs only — done when documented in ai-swarm README (depends on: key available)
 
 ### Core backend (lead + Claude agents)
@@ -155,7 +155,8 @@ See [docs/CONTRACT.md](docs/CONTRACT.md) (DRAFT v1.0-pre.5). It covers:
 - [ ] **M1** (builder) Profile overview wiring — done when join (and later interview/socials) stores overview asynchronously and tests cover agents failure without failing join (depends on: agents `/profile-overview`, schema `overview` column or equivalent):
   - `GET /api/me/profile` returns overview, summary, traits, contacts, socials
   - after join / interview-summary / social_notes update: call agents `POST /profile-overview`, persist overview + merged traits, then re-embed
-- [ ] **M1** (builder) `POST /api/question-suggestions` — done when it proxies to agents `/generate-questions`, validates count/kinds, returns 502 `agents_unavailable` on timeout, and API tests pass (depends on: agents QuizGen)
+  - _Agents `/profile-overview` is ready; backend wiring tracked separately._
+- [ ] **M1** (builder) `POST /api/question-suggestions` — done when it proxies to agents `/generate-questions`, validates count/kinds, returns 502 `agents_unavailable` on timeout, and API tests pass (depends on: agents QuizGen). _Agents `/generate-questions` is ready; backend proxy tracked separately._
 - [ ] **M1** (builder) Requests and consent — done when no group ever exceeds max_size or group_count and no user exceeds the event's `max_groups_per_user`, including when two accepts arrive at once (depends on: schema):
   - `POST /api/requests` to a user or a group
   - accept/decline

@@ -10,9 +10,13 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from agents import (
     GeminiNotConfigured,
+    OverviewError,
+    QuizGenError,
     RecommenderError,
     env_value,
     run_gemini_interviewer,
+    run_profile_overview_agent,
+    run_quizgen_agent,
     run_recommender_agent,
     run_summarizer_agent,
 )
@@ -67,18 +71,60 @@ class RecommendEvent(BaseModel):
 class RecommendViewer(BaseModel):
     user_id: str
     profile_text: str = ""
+    traits: dict[str, str] = Field(default_factory=dict)
+    topic_signals: list[str] = Field(default_factory=list)
+    group_need: Optional[str] = None
 
 class RecommendCandidate(BaseModel):
     candidate_type: Literal["user", "group"]
     id: str
     profile_text: str = ""
     similarity: Optional[float] = None
+    traits: dict[str, str] = Field(default_factory=dict)
+    topic_signals: list[str] = Field(default_factory=list)
+    group_need: Optional[str] = None
 
 class RecommendPayload(BaseModel):
     event: RecommendEvent
     viewer: RecommendViewer
     candidates: list[RecommendCandidate] = Field(max_length=100)
     limit: int = Field(10, ge=1, le=50)
+
+class ProfileOverviewEvent(BaseModel):
+    event_id: Optional[str] = None
+    name: Optional[str] = None
+    type: Optional[str] = None
+    tone: Optional[str] = None
+
+class ProfileOverviewUser(BaseModel):
+    user_id: str
+    name: Optional[str] = None
+
+class ProfileOverviewPayload(BaseModel):
+    user: ProfileOverviewUser
+    answers: dict = Field(default_factory=dict)
+    fields: dict = Field(default_factory=dict)
+    social_notes: Optional[str] = None
+    interview_summary: Optional[str] = None
+    interview_traits: dict[str, str] = Field(default_factory=dict)
+    event: Optional[ProfileOverviewEvent] = None
+
+class ExistingQuestion(BaseModel):
+    text: str
+    kind: Optional[str] = None
+    options: Optional[list[str]] = None
+
+class GenerateQuestionsEvent(BaseModel):
+    name: str = ""
+    type: Optional[str] = None
+    tone: Optional[str] = None
+    description: Optional[str] = ""
+
+class GenerateQuestionsPayload(BaseModel):
+    event: GenerateQuestionsEvent
+    existing_questions: list[ExistingQuestion] = Field(default_factory=list)
+    count: int = Field(3, ge=1, le=10)
+    hint: Optional[str] = None
 
 class InterviewTurnRequest(BaseModel):
     history: list[dict]
@@ -103,6 +149,30 @@ async def get_recommendations(payload: RecommendPayload):
     except RecommenderError as exc:
         raise ApiError(502, "recommender_failed", str(exc))
     return {"results": reranked}
+
+@app.post("/profile-overview", dependencies=[Depends(require_internal_key)])
+async def profile_overview(payload: ProfileOverviewPayload):
+    """POST /profile-overview: questionnaire + socials + interview → overview + traits."""
+    try:
+        result = await run_in_threadpool(run_profile_overview_agent, payload.model_dump())
+    except OverviewError as exc:
+        raise ApiError(502, "overview_failed", str(exc))
+    return result
+
+@app.post("/generate-questions", dependencies=[Depends(require_internal_key)])
+async def generate_questions(payload: GenerateQuestionsPayload):
+    """POST /generate-questions: host questionnaire AI assist (QuizGen)."""
+    try:
+        questions = await run_in_threadpool(
+            run_quizgen_agent,
+            event=payload.event.model_dump(),
+            existing_questions=[q.model_dump() for q in payload.existing_questions],
+            count=payload.count,
+            hint=payload.hint,
+        )
+    except QuizGenError as exc:
+        raise ApiError(502, "quizgen_failed", str(exc))
+    return {"questions": questions}
 
 @app.post("/internal/interview-summary", dependencies=[Depends(require_internal_key)])
 def summarize_interview(req: SummarizeRequest):
