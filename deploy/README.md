@@ -50,7 +50,9 @@ touch agents/.env                           # must exist even if empty; fill in 
 - `SERPAPI_API_KEY`
 - `INTERNAL_API_KEY`: a random value. Use **the same value** in `agents/.env`.
 
-**agents/.env:** `GEMINI_API_KEY`, `INTERNAL_API_KEY` (the same value as the backend), plus anything else the agents team documents.
+**agents/.env:** `GEMINI_API_KEY`, `INTERNAL_API_KEY` (the same value as the backend). Optional: `GEMINI_MODEL`, `GEMINI_LIVE_MODEL`, `GEMINI_FALLBACK_MODELS` (comma-separated). Leave `BACKEND_URL` empty; compose sets it.
+
+Production has no dev login (`DEV_LOGIN=0`): everyone signs in with Google. If the OAuth consent screen is in "Testing", add every demo account under "Test users" (or publish the app).
 
 Wrap any value that contains `$` in single quotes.
 
@@ -62,7 +64,7 @@ docker compose ps                 # backend/agents should become "healthy"; fron
 curl -I https://<domain>/         # the SPA
 curl https://<domain>/api/me      # 401 JSON from the backend means routing works
 ```
-**Before `frontend/` exists** (it needs `package.json`, `package-lock.json` and an `npm run build` that writes `dist/`), start the other services only: `docker compose up -d --build backend agents caddy`. Likewise, leave out `agents` until `agents/Dockerfile` exists.
+To bring up only part of the stack: `docker compose up -d --build backend agents caddy`.
 
 ## Logs, updates, demo reset
 ```bash

@@ -23,7 +23,7 @@ COPY . .
 
 ENV PATH="/app/.venv/bin:$PATH"
 
-RUN useradd --system --uid 10001 --no-create-home squadup
+RUN useradd --system --uid 10001 --create-home squadup
 USER squadup
 
 EXPOSE 8001
