@@ -1,0 +1,2 @@
+# secrets: the root .gitignore covers .env but not api.env
+api.env
