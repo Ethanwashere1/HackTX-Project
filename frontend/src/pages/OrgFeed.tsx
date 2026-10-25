@@ -69,7 +69,7 @@ export function OrgFeedPage() {
           </h3>
           <Link to="/events/new">All events →</Link>
         </div>
-        <div className="su-grid-2">
+        <div className="su-grid-2 su-grid-wide">
           {feed.events.map((evt) => (
             <article key={evt.event_id} className="su-card feed-card">
               <div className="feed-card-top">

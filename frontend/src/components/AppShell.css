@@ -14,6 +14,14 @@
   position: sticky;
   top: 0;
   height: 100vh;
+  z-index: 30;
+}
+
+.shell-brand-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
 }
 
 .shell-brand {
@@ -33,6 +41,13 @@
   display: grid;
   place-items: center;
   color: #fff;
+}
+
+.shell-menu-close,
+.shell-menu-toggle,
+.shell-backdrop,
+.shell-bottom {
+  display: none;
 }
 
 .shell-org {
@@ -87,7 +102,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: 40px;
+  min-height: 40px;
   padding: 0 0.75rem;
   border-radius: 7px;
   color: rgba(255, 255, 255, 0.78);
@@ -174,11 +189,12 @@
 }
 
 .shell-top {
-  height: 64px;
+  min-height: 64px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 2rem;
+  gap: 0.75rem;
+  padding: 0 var(--su-page-pad-x);
   border-bottom: 1px solid var(--su-border);
   background: rgba(255, 255, 255, 0.7);
   backdrop-filter: blur(8px);
@@ -191,46 +207,154 @@
   margin: 0;
   color: var(--su-text-muted);
   font-size: 0.85rem;
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .shell-utils {
   display: flex;
   align-items: center;
   gap: 0.85rem;
+  flex-shrink: 0;
 }
 
 .shell-invites {
   border: 1px solid var(--su-border);
   border-radius: 999px;
   padding: 0.4rem 0.85rem;
+  min-height: var(--su-touch);
+  display: inline-flex;
+  align-items: center;
   font-size: 0.8rem;
   background: #fff;
 }
 
-@media (max-width: 900px) {
-  .shell {
-    flex-direction: column;
-  }
-
+/* Large monitor: slightly wider sidebar breathing room */
+@media (min-width: 1600px) {
   .shell-sidebar {
-    width: 100%;
-    height: auto;
-    position: relative;
+    width: 260px;
   }
+}
 
-  .shell-nav {
-    flex-direction: row;
-    overflow-x: auto;
-    padding-bottom: 0.75rem;
-  }
-
-  .shell-spaces,
-  .shell-foot > a,
+/* Tablet / iPad */
+@media (max-width: 1024px) {
   .shell-promise {
     display: none;
   }
 
+  .shell-menu-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: var(--su-touch);
+    min-width: var(--su-touch);
+    padding: 0 0.85rem;
+    border-radius: 10px;
+    border: 1px solid var(--su-border);
+    background: #fff;
+    color: var(--su-text);
+    font-weight: 600;
+    font-size: 0.85rem;
+  }
+
+  .shell-sidebar {
+    position: fixed;
+    inset: 0 auto 0 0;
+    width: min(280px, 86vw);
+    height: 100dvh;
+    transform: translateX(-105%);
+    transition: transform 0.22s ease;
+    box-shadow: 12px 0 40px rgba(13, 26, 19, 0.25);
+  }
+
+  .shell.is-menu-open .shell-sidebar {
+    transform: translateX(0);
+  }
+
+  .shell-menu-close {
+    display: inline-flex;
+    margin-right: 0.85rem;
+    width: 36px;
+    height: 36px;
+    border: none;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.1);
+    color: #fff;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .shell-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    border: none;
+    background: rgba(13, 26, 19, 0.45);
+    z-index: 20;
+  }
+}
+
+/* Phone */
+@media (max-width: 640px) {
+  .shell-invites {
+    display: none;
+  }
+
+  .shell-main {
+    padding-bottom: calc(3.75rem + env(safe-area-inset-bottom));
+  }
+
   .shell-top {
-    padding: 0 1rem;
+    padding-inline: 0.85rem;
+  }
+
+  .shell-bottom {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 15;
+    background: #fff;
+    border-top: 1px solid var(--su-border);
+    padding: 0.35rem 0.25rem calc(0.35rem + env(safe-area-inset-bottom));
+  }
+
+  .shell-bottom-link {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 48px;
+    font-size: 0.65rem;
+    font-weight: 600;
+    color: var(--su-text-muted);
+    border-radius: 10px;
+  }
+
+  .shell-bottom-link.is-active {
+    color: var(--su-teal);
+    background: rgba(21, 119, 111, 0.08);
+  }
+
+  .shell-bottom-link i {
+    position: absolute;
+    top: 4px;
+    right: 18%;
+    min-width: 14px;
+    height: 14px;
+    border-radius: 999px;
+    background: #ecd5a8;
+    color: #7a3a12;
+    font-style: normal;
+    font-size: 0.55rem;
+    display: grid;
+    place-items: center;
+    padding: 0 0.2rem;
   }
 }

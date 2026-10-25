@@ -21,4 +21,50 @@
   --su-shadow: 0 8px 28px rgba(13, 26, 19, 0.08);
   --su-font: "Inter", system-ui, sans-serif;
   --su-sidebar-w: 232px;
+  --su-page-pad-x: 2rem;
+  --su-page-pad-y: 1.5rem;
+  --su-content-max: 1200px;
+  --su-touch: 44px;
+}
+
+/* Large computer / laptop */
+@media (max-width: 1440px) {
+  :root {
+    --su-content-max: 1080px;
+    --su-page-pad-x: 1.5rem;
+  }
+}
+
+/* Laptop / small desktop */
+@media (max-width: 1280px) {
+  :root {
+    --su-content-max: 960px;
+    --su-page-pad-x: 1.35rem;
+  }
+}
+
+/* iPad / tablet */
+@media (max-width: 1024px) {
+  :root {
+    --su-sidebar-w: 200px;
+    --su-page-pad-x: 1.25rem;
+    --su-page-pad-y: 1.25rem;
+    --su-content-max: 100%;
+  }
+}
+
+/* Large phone / small tablet */
+@media (max-width: 768px) {
+  :root {
+    --su-page-pad-x: 1.1rem;
+    --su-page-pad-y: 1.1rem;
+  }
+}
+
+/* Phone */
+@media (max-width: 640px) {
+  :root {
+    --su-page-pad-x: 1rem;
+    --su-page-pad-y: 1rem;
+  }
 }
