@@ -47,7 +47,32 @@ export function AppShell() {
 
   const orgs = me?.orgs ?? [];
   const primary = orgs[0] ?? null;
-  const home = primary ? `/orgs/${primary.org_id}` : "/orgs";
+
+  // Without an approved org, Discover opens the first org the user can see (its feed page shows a
+  // join panel) instead of duplicating the Organizations link.
+  const [discoverOrgId, setDiscoverOrgId] = useState<string | null>(null);
+  useEffect(() => {
+    if (primary) return;
+    let live = true;
+    api
+      .listOrgs()
+      .then((list) => {
+        const pick = list.find((o) => o.my_status === "pending") ?? list[0];
+        if (live && pick) setDiscoverOrgId(pick.org_id);
+      })
+      .catch(() => {
+        /* fall back to /orgs */
+      });
+    return () => {
+      live = false;
+    };
+  }, [primary]);
+
+  const home = primary
+    ? `/orgs/${primary.org_id}`
+    : discoverOrgId
+      ? `/orgs/${discoverOrgId}`
+      : "/orgs";
   // No "my events", "my squads" or "messages" list exists in the API yet, so the nav links to the
   // org feed (with a joined filter) and the requests inbox, which links to chats and squads.
   const nav = [
