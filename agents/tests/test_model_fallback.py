@@ -49,3 +49,48 @@ def test_a_bad_request_does_not_fall_back(fake_gemini):
     with pytest.raises(genai_errors.ClientError):
         agents.run_gemini_interviewer([{"role": "user", "text": "hi"}])
     assert len(fake_gemini.models.calls) == 1
+
+
+def _first_model_overloaded(result):
+    def handler(schema, call):
+        if call["model"] == agents.MODEL_ID:
+            raise overloaded(503)
+        return result
+    return handler
+
+
+def _tried(fake_gemini):
+    return [c["model"] for c in fake_gemini.models.calls]
+
+
+def test_profile_overview_falls_back(fake_gemini):
+    fake_gemini.models.handler = _first_model_overloaded({"overview": "Climate builder.", "traits": {"topics": "climate"}})
+    out = agents.run_profile_overview_agent({"user": {"user_id": "usr_a1"}, "interview_traits": {}})
+    assert out == {"overview": "Climate builder.", "traits": {"topics": "climate"}}
+    assert _tried(fake_gemini) == [agents.MODEL_ID, agents.FALLBACK_MODEL_IDS[0]]
+
+
+def test_quizgen_falls_back(fake_gemini):
+    fake_gemini.models.handler = _first_model_overloaded(
+        {"questions": [{"text": "What do you want to build?", "kind": "text", "options": None, "required": False}]}
+    )
+    out = agents.run_quizgen_agent({"name": "HackTX"}, [], count=1)
+    assert out[0]["text"] == "What do you want to build?"
+    assert _tried(fake_gemini) == [agents.MODEL_ID, agents.FALLBACK_MODEL_IDS[0]]
+
+
+def test_recommender_falls_back(fake_gemini):
+    fake_gemini.models.handler = _first_model_overloaded(
+        {"results": [{"id": "usr_b2", "score": 0.8, "reason": "Both like climate."}]}
+    )
+    out = agents.run_gemini_matchmaker(
+        {"user_id": "usr_a1"}, [{"candidate_type": "user", "id": "usr_b2", "profile_text": ""}], {"event_id": "e"}, 5
+    )
+    assert out[0]["id"] == "usr_b2"
+    assert _tried(fake_gemini) == [agents.MODEL_ID, agents.FALLBACK_MODEL_IDS[0]]
+
+
+def test_summarizer_falls_back(fake_gemini):
+    fake_gemini.models.handler = _first_model_overloaded({"summary": "Frontend dev.", "traits": ["react"]})
+    assert agents.run_gemini_profiler("USER: hi")["summary"] == "Frontend dev."
+    assert _tried(fake_gemini) == [agents.MODEL_ID, agents.FALLBACK_MODEL_IDS[0]]

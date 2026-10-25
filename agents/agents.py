@@ -158,14 +158,30 @@ class QuizGenError(RuntimeError):
     """Gemini failed or returned unusable questionnaire questions."""
 
 
+class TraitPair(BaseModel):
+    key: str = Field(description="Short snake_case trait name.")
+    value: str = Field(description="Short trait value.")
+
+
+# Fixed keys, not dict[str, str]: a free-form map becomes `additionalProperties` in the
+# response schema, which the Gemini Developer API rejects. Flattened to a dict afterwards.
+class OverviewTraits(BaseModel):
+    working_style: str | None = Field(default=None, description="e.g. pairing, async, leader.")
+    ambition: str | None = Field(default=None, description="e.g. win, learn, have fun.")
+    availability: str | None = Field(default=None, description="e.g. all weekend, evenings.")
+    topics: str | None = Field(default=None, description="Comma-separated lowercase interests/skills.")
+    group_need: str | None = Field(default=None, description="What kind of people or group they want.")
+    other: list[TraitPair] = Field(default_factory=list, description="Any other short string traits.")
+
+    def as_dict(self) -> dict[str, str | None]:
+        flat: dict[str, str | None] = {p.key: p.value for p in self.other}
+        flat.update({k: v for k, v in self.model_dump(exclude={"other"}).items() if v is not None})
+        return flat
+
+
 class ProfileOverviewResponse(BaseModel):
     overview: str = Field(description="2-3 sentence profile overview for recommendations and the profile page.")
-    traits: dict[str, str] = Field(
-        description=(
-            "Merged trait map: working_style, ambition, availability, topics (comma-separated), "
-            "group_need, and any other short string traits."
-        )
-    )
+    traits: OverviewTraits = Field(description="Merged traits from interview, answers, fields and social notes.")
 
 
 def _clean_traits(raw: dict | None) -> dict[str, str]:
@@ -213,8 +229,7 @@ def run_profile_overview_agent(payload: dict) -> dict:
         f"{json.dumps(payload, ensure_ascii=False)}"
     )
     try:
-        response = get_client().models.generate_content(
-            model=MODEL_ID,
+        response = generate(
             contents=prompt,
             config=types.GenerateContentConfig(
                 system_instruction=(
@@ -240,7 +255,7 @@ def run_profile_overview_agent(payload: dict) -> dict:
     overview = parsed.overview.strip()
     if not overview:
         raise OverviewError("Overview returned empty text.")
-    traits = _clean_traits(parsed.traits)
+    traits = _clean_traits(parsed.traits.as_dict())
     # Keep interview traits when the model drops them.
     interview_traits = payload.get("interview_traits") or {}
     if isinstance(interview_traits, dict):
@@ -318,8 +333,7 @@ def run_quizgen_agent(
         f"Propose exactly {count} new short assessment questions for joiners."
     )
     try:
-        response = get_client().models.generate_content(
-            model=MODEL_ID,
+        response = generate(
             contents=prompt,
             config=types.GenerateContentConfig(
                 system_instruction=(

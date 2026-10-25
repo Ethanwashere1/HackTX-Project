@@ -1,4 +1,5 @@
 """Boot without a key, /health, /recommend and the legacy endpoints."""
+import json
 import os
 import subprocess
 import sys
@@ -309,3 +310,51 @@ def test_ml_model_mock_still_works():
     from ml_model import recommend_candidates_mock
     ranked = recommend_candidates_mock("user-1", [{"user_id": "user-1"}, {"user_id": "user-2", "skills": ["python"]}])
     assert [r["user_id"] for r in ranked] == ["user-2"]
+
+
+@pytest.mark.parametrize(
+    "schema", [InterviewerTurn, InterviewSummaryResponse, ProfileOverviewResponse, QuizGenResponse, RecommenderResponse]
+)
+def test_response_schemas_have_no_free_form_maps(schema):
+    """The Gemini Developer API rejects `additionalProperties` (dict[str, X]) in response_schema."""
+    assert "additionalProperties" not in json.dumps(schema.model_json_schema())
+
+
+def test_profile_overview_flattens_other_traits(client, fake_gemini):
+    fake_gemini.models.handler = lambda schema, call: {
+        "overview": "Climate builder.",
+        "traits": {"topics": "climate", "group_need": None,
+                   "other": [{"key": "role", "value": "frontend"}, {"key": "topics", "value": "ignored"}]},
+    }
+    resp = client.post("/profile-overview", json=OVERVIEW_BODY, headers=AUTH)
+    assert resp.status_code == 200
+    traits = resp.json()["traits"]
+    assert traits["role"] == "frontend"
+    assert traits["topics"] == "climate"
+    assert "group_need" not in traits and "other" not in traits
+
+
+def test_non_string_trait_values_are_coerced_not_rejected(client, fake_gemini):
+    """Stored profile.traits can hold lists (interview.py posts {"highlights": [...]}); never 422."""
+    prompts = []
+
+    def handler(schema, call):
+        prompts.append(call["contents"])
+        if schema is ProfileOverviewResponse:
+            return {"overview": "Climate builder.", "traits": {"topics": "climate"}}
+        return {"results": [{"id": "usr_b2", "score": 0.9, "reason": "Shared climate focus."}]}
+
+    fake_gemini.models.handler = handler
+    body = {**OVERVIEW_BODY, "interview_traits": {"highlights": ["react", "climate"], "hours": 20, "gone": None}}
+    resp = client.post("/profile-overview", json=body, headers=AUTH)
+    assert resp.status_code == 200
+    traits = resp.json()["traits"]
+    assert traits["highlights"] == "react, climate"
+    assert traits["hours"] == "20"
+    assert "gone" not in traits
+
+    viewer = {**RECOMMEND_BODY["viewer"], "traits": {"highlights": ["svelte"], "topics": "climate"}}
+    resp = client.post("/recommend", json={**RECOMMEND_BODY, "viewer": viewer}, headers=AUTH)
+    assert resp.status_code == 200
+    assert resp.json()["results"][0]["id"] == "usr_b2"
+    assert "svelte" in prompts[-1]
