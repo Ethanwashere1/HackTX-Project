@@ -6,6 +6,10 @@
   box-sizing: border-box;
 }
 
+html {
+  -webkit-text-size-adjust: 100%;
+}
+
 html,
 body,
 #root {
@@ -19,6 +23,7 @@ body {
   background: var(--su-surface);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  overflow-x: hidden;
 }
 
 a {
@@ -39,6 +44,7 @@ button {
 
 img {
   max-width: 100%;
+  height: auto;
   display: block;
 }
 
@@ -78,4 +84,12 @@ img {
 
 .su-pulse {
   animation: su-pulse 1.6s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .su-fade-up,
+  .su-fade-up-delay,
+  .su-pulse {
+    animation: none;
+  }
 }

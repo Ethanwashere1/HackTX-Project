@@ -145,7 +145,11 @@ function ThreadView({ threadId }: { threadId: string }) {
         })}
       </div>
 
-      <form onSubmit={(e) => void send(e)} style={{ display: "flex", gap: "0.6rem" }}>
+      <form
+        className="su-chat-compose"
+        onSubmit={(e) => void send(e)}
+        style={{ display: "flex", gap: "0.6rem" }}
+      >
         <input
           className="su-input"
           value={text}

@@ -158,7 +158,7 @@ export function OrgFeedPage() {
             {joinedOnly ? "You haven't joined any upcoming events here yet." : "No upcoming events yet. Create one!"}
           </p>
         ) : null}
-        <div className="su-grid-2">
+        <div className="su-grid-2 su-grid-wide">
           {events.map((evt) => {
             const tag = eventTag(evt);
             return (

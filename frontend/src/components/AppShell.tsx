@@ -16,6 +16,18 @@ export function AppShell() {
   const navigate = useNavigate();
   const location = useLocation();
   const [pendingIncoming, setPendingIncoming] = useState(0);
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  useEffect(() => {
+    setMenuOpen(false);
+  }, [location.pathname]);
+
+  useEffect(() => {
+    document.body.style.overflow = menuOpen ? "hidden" : "";
+    return () => {
+      document.body.style.overflow = "";
+    };
+  }, [menuOpen]);
 
   // Refresh the Requests badge on every navigation (there is no push channel).
   useEffect(() => {
@@ -39,25 +51,43 @@ export function AppShell() {
   // No "my events", "my teams" or "messages" list exists in the API yet, so the nav links to the
   // org feed (with a joined filter) and the requests inbox, which links to chats and teams.
   const nav = [
-    { to: home, label: "Discover", end: true },
-    ...(primary ? [{ to: `${home}?joined=1`, label: "My events", end: true }] : []),
-    { to: "/requests", label: "Requests", badge: pendingIncoming },
-    { to: "/orgs", label: "Organizations", end: true },
+    { to: home, label: "Discover", short: "Home", end: true },
+    ...(primary ? [{ to: `${home}?joined=1`, label: "My events", short: "Events", end: true }] : []),
+    { to: "/requests", label: "Requests", short: "Inbox", badge: pendingIncoming },
+    { to: "/orgs", label: "Organizations", short: "Orgs", end: true },
   ];
 
+  // NavLink ignores the query string, so tell Discover and My events apart here.
+  const isNavActive = (label: string, isActive: boolean) => {
+    const joinedView = new URLSearchParams(location.search).get("joined") === "1";
+    return (
+      isActive && (label === "My events" ? joinedView : label === "Discover" ? !joinedView : true)
+    );
+  };
+
   return (
-    <div className="shell">
-      <aside className="shell-sidebar">
-        <div className="shell-brand">
-          <span className="shell-mark" aria-hidden>
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-              <path
-                d="M8 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm8 0a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM12 14a4.5 4.5 0 0 0-4.5 4.5V20h9v-1.5A4.5 4.5 0 0 0 12 14Z"
-                fill="currentColor"
-              />
-            </svg>
-          </span>
-          <span>SquadUp</span>
+    <div className={`shell${menuOpen ? " is-menu-open" : ""}`}>
+      <aside className="shell-sidebar" id="shell-sidebar" aria-label="Sidebar">
+        <div className="shell-brand-row">
+          <div className="shell-brand">
+            <span className="shell-mark" aria-hidden>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                <path
+                  d="M8 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm8 0a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM12 14a4.5 4.5 0 0 0-4.5 4.5V20h9v-1.5A4.5 4.5 0 0 0 12 14Z"
+                  fill="currentColor"
+                />
+              </svg>
+            </span>
+            <span>SquadUp</span>
+          </div>
+          <button
+            type="button"
+            className="shell-menu-close"
+            aria-label="Close menu"
+            onClick={() => setMenuOpen(false)}
+          >
+            ✕
+          </button>
         </div>
 
         <button
@@ -78,14 +108,9 @@ export function AppShell() {
               key={item.label}
               to={item.to}
               end={item.end}
-              className={({ isActive }) => {
-                // NavLink ignores the query string, so tell Discover and My events apart here.
-                const joinedView = new URLSearchParams(location.search).get("joined") === "1";
-                const active =
-                  isActive &&
-                  (item.label === "My events" ? joinedView : item.label === "Discover" ? !joinedView : true);
-                return `shell-nav-link${active ? " is-active" : ""}`;
-              }}
+              className={({ isActive }) =>
+                `shell-nav-link${isNavActive(item.label, isActive) ? " is-active" : ""}`
+              }
             >
               <span>{item.label}</span>
               {item.badge ? <span className="shell-badge">{item.badge}</span> : null}
@@ -117,8 +142,26 @@ export function AppShell() {
         </div>
       </aside>
 
+      {menuOpen ? (
+        <button
+          type="button"
+          className="shell-backdrop"
+          aria-label="Close menu overlay"
+          onClick={() => setMenuOpen(false)}
+        />
+      ) : null}
+
       <div className="shell-main">
         <header className="shell-top">
+          <button
+            type="button"
+            className="shell-menu-toggle"
+            aria-expanded={menuOpen}
+            aria-controls="shell-sidebar"
+            onClick={() => setMenuOpen((v) => !v)}
+          >
+            Menu
+          </button>
           <p className="shell-promise">A little connection. A lot of possibility.</p>
           <div className="shell-utils">
             <NavLink to="/requests" className="shell-invites">
@@ -129,6 +172,25 @@ export function AppShell() {
         </header>
         <Outlet />
       </div>
+
+      <nav className="shell-bottom" aria-label="Mobile">
+        {nav.slice(0, 4).map((item) => (
+          <NavLink
+            key={item.label}
+            to={item.to}
+            end={item.end}
+            className={({ isActive }) =>
+              `shell-bottom-link${isNavActive(item.label, isActive) ? " is-active" : ""}`
+            }
+          >
+            <span>{item.short}</span>
+            {item.badge ? <i>{item.badge}</i> : null}
+          </NavLink>
+        ))}
+        <NavLink to="/profile" className="shell-bottom-link">
+          Profile
+        </NavLink>
+      </nav>
     </div>
   );
 }

@@ -6,6 +6,7 @@
   border: none;
   border-radius: 10px;
   padding: 0.7rem 1.1rem;
+  min-height: var(--su-touch);
   font-weight: 600;
   font-size: 0.9375rem;
   transition: transform 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
@@ -38,7 +39,7 @@
 
 .su-btn-google {
   width: 100%;
-  height: 56px;
+  min-height: 56px;
   background: #fff;
   color: #17394b;
   border-radius: 10px;
@@ -97,6 +98,7 @@
   border: 1px solid var(--su-border);
   border-radius: 10px;
   padding: 0.75rem 0.9rem;
+  min-height: var(--su-touch);
   background: #fff;
   color: var(--su-text);
 }
@@ -131,12 +133,14 @@
 }
 
 .su-page {
-  padding: 1.5rem 2rem 3rem;
+  width: min(100%, var(--su-content-max));
+  margin-inline: auto;
+  padding: var(--su-page-pad-y) var(--su-page-pad-x) 3rem;
 }
 
 .su-page-title {
   margin: 0 0 0.35rem;
-  font-size: clamp(1.6rem, 2.4vw, 2.1rem);
+  font-size: clamp(1.45rem, 2.4vw, 2.1rem);
   letter-spacing: -0.02em;
 }
 
@@ -153,12 +157,72 @@
   gap: 1rem;
 }
 
-@media (max-width: 900px) {
-  .su-grid-2 {
+.su-grid-3 {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+/* Wide monitor: optional third column density */
+@media (min-width: 1441px) {
+  .su-grid-2.su-grid-wide {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+/* iPad portrait / small laptop */
+@media (max-width: 1024px) {
+  .su-grid-3 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* Large phone / small tablet */
+@media (max-width: 768px) {
+  .su-grid-2,
+  .su-grid-2.su-grid-wide {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Phone */
+@media (max-width: 640px) {
+  .su-grid-2,
+  .su-grid-3,
+  .su-grid-2.su-grid-wide {
     grid-template-columns: 1fr;
   }
 
   .su-page {
-    padding: 1rem 1rem 2.5rem;
+    padding-bottom: 1.5rem;
+  }
+
+  .su-btn-google,
+  .su-btn-block {
+    width: 100%;
+  }
+
+  .su-row-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+  }
+
+  .su-row-actions .su-btn {
+    width: 100%;
+  }
+
+  .su-chat-compose {
+    flex-direction: column;
+  }
+
+  .su-chat-compose .su-btn {
+    width: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .su-btn:hover {
+    transform: none;
   }
 }

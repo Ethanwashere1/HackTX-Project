@@ -324,7 +324,11 @@ export function InterviewPage() {
           </div>
 
           {live ? (
-            <form style={{ marginTop: "1rem", display: "flex", gap: "0.5rem" }} onSubmit={sendText}>
+            <form
+              className="su-chat-compose"
+              style={{ marginTop: "1rem", display: "flex", gap: "0.5rem" }}
+              onSubmit={sendText}
+            >
               <input
                 className="su-input"
                 value={text}
@@ -355,7 +359,7 @@ export function InterviewPage() {
               We'll save a short summary + traits to your profile, then re-rank recommendations.
             </p>
           )}
-          <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", marginTop: "1rem" }}>
+          <div className="su-row-actions" style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", marginTop: "1rem" }}>
             {phase === "done" ? (
               <Link className="su-btn su-btn-primary" to={`/events/${eventId}/recommendations`}>
                 See recommendations

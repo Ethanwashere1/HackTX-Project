@@ -1,5 +1,5 @@
-import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   plugins: [react()],
@@ -17,5 +17,13 @@ export default defineConfig({
         rewrite: (path) => path.replace(/^\/agents/, ""),
       },
     },
+  },
+  test: {
+    environment: "jsdom",
+    // The app talks to the real backend by default; tests run against the in-memory mocks.
+    env: { VITE_USE_MOCKS: "1" },
+    setupFiles: "./src/test/setup.ts",
+    css: true,
+    fileParallelism: false,
   },
 });
