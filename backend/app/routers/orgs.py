@@ -3,6 +3,7 @@
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Request
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field, StringConstraints, field_validator, model_validator
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import delete
@@ -116,8 +117,9 @@ def update_org(org_id: str, body: OrgPatch, user: CurrentUser, db: DbSession):
 
 @router.post("/{org_id}/join")
 def join_org(org_id: str, user: CurrentUser, db: DbSession, body: JoinOrgBody | None = None):
-    """Request to join. Auto-approved on an email-domain or roster match, else pending.
-    A pending request keeps its place; a declined user may ask again."""
+    """Request to join. Auto-approved on an email-domain or roster email match, else pending.
+    A pending request keeps its place; a declined user may ask again, and that request always
+    waits for an admin (it keeps the decline's decided_at/decided_by, see services.orgs)."""
     org = svc.get_org(db, org_id)
     message = body.message if body else None
     member = svc.get_org_member(db, org.id, user.id, lock=True)
@@ -130,8 +132,7 @@ def join_org(org_id: str, user: CurrentUser, db: DbSession, body: JoinOrgBody | 
     member.status = "pending"
     if message is not None:
         member.message = message
-    member.decided_at = member.decided_by = None
-    if svc.auto_matcher(db, org)(user):
+    if member.decided_at is None and svc.auto_matcher(db, org)(user):
         svc.approve(member, None)
     db.add(member)
     try:
@@ -201,8 +202,14 @@ async def _roster_upload(request: Request, _: AdminOrg) -> list[svc.RosterRow]:
         body += chunk
         if len(body) > svc.MAX_ROSTER_UPLOAD_BYTES:
             raise svc.too_large()
-    data = svc.extract_upload(request.headers.get("content-type", ""), bytes(body))
-    return svc.parse_roster_csv(data)
+    # Parsing up to 1 MiB is CPU-bound: keep it off the event loop.
+    return await run_in_threadpool(
+        _parse_roster, request.headers.get("content-type", ""), bytes(body)
+    )
+
+
+def _parse_roster(content_type: str, body: bytes) -> list[svc.RosterRow]:
+    return svc.parse_roster_csv(svc.extract_upload(content_type, body))
 
 
 @router.put("/{org_id}/roster")

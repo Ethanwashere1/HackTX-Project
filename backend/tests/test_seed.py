@@ -9,7 +9,7 @@ from sqlmodel import Session, func, select
 
 from app import db as dbmod
 from app import seed
-from app.config import EMBEDDING_DIM
+from app.config import EMBEDDING_DIM, get_settings
 from app.models import (
     Connection,
     ContactMethod,
@@ -27,7 +27,7 @@ from app.models import (
 from app.services import agents_client, snowflake_store
 from tests.test_embeddings import FakeGemini, FakeSnowflake, gemini_on, snowflake_on
 from tests.test_recommendations import FakeAgents, group_ids, people_ids, recs
-from tests.test_requests import join, make_event, uid
+from tests.test_requests import accept_ok, form_group, join, make_event, send_ok, uid
 
 NAMES = {p.key: p.name for p in [seed.HOST, *seed.PEOPLE]}
 
@@ -145,13 +145,19 @@ def test_running_twice_creates_nothing_new(seeded):
         seeded.org_id, seeded.events, seeded.users, seeded.groups)
 
 
-def test_reset_removes_only_seed_data(seeded, login_as, db):
-    # A real user with their own event outside the seed org, who also joined the seed event.
+def test_reset_with_no_real_users_removes_all_seed_data(seeded, db):
+    assert seed.wipe(db) == {"users": 16, "users_kept": 0, "orgs": 1, "orgs_kept": 0, "events": 2}
+    assert table_counts() == dict.fromkeys(table_counts(), 0)
+    assert seed.wipe(db) == {"users": 0, "users_kept": 0, "orgs": 0, "orgs_kept": 0, "events": 0}
+
+
+def test_reset_keeps_real_users_seed_org_membership_and_events(seeded, login_as, db, capsys):
+    # A real attendee: their utexas.edu email auto-approves them into the seed org (the point of
+    # the demo). They host an event in it and also join the seed HackTX event.
     real = login_as("real@utexas.edu", "Real Person")
-    own_event = make_event(real)
+    assert real.post(f"/api/orgs/{seeded.org_id}/join").json() == {"status": "approved"}
+    own_event = make_event(real, org_id=seeded.org_id)
     join(real, own_event)
-    db.add(OrgMember(org_id=seeded.org_id, user_id=uid(real), status="approved"))
-    db.commit()
     q = real.get(f"/api/events/{seeded.events['hacktx']}").json()["questions"]
     resp = real.post(f"/api/events/{seeded.events['hacktx']}/join", json={
         "answers": [{"question_id": q[0]["question_id"], "value": "Frontend"},
@@ -168,24 +174,88 @@ def test_reset_removes_only_seed_data(seeded, login_as, db):
     db.commit()
 
     removed = seed.wipe(db)
-    assert removed == {"users": 16, "orgs": 1, "events": 2}
-    assert db.get(User, google_user.id) is not None
+    # The org is kept (a real member hosts an event in it), so is its creator (the seed host).
+    assert removed == {"users": 15, "users_kept": 1, "orgs": 0, "orgs_kept": 1, "events": 2}
     db.expire_all()
-    assert seed.seed_user_ids(db) == []
-    assert db.get(Org, seeded.org_id) is None
-    assert db.exec(select(Event.id)).all() == [own_event]
+    assert db.get(User, google_user.id) is not None
+    assert seed.seed_user_ids(db) == [seeded.users["morgan"]]
+    org = db.get(Org, seeded.org_id)
+    assert org is not None and org.email_domains == ["utexas.edu"]
+    # Only the real user's membership is left in it; the seed users' memberships are gone.
+    assert db.exec(select(OrgMember.user_id, OrgMember.status, OrgMember.role)
+                   .where(OrgMember.org_id == org.id)).all() == [(uid(real), "approved", "member")]
+    # The seed events are gone (with the real user's membership in HackTX); theirs survives.
+    assert db.exec(select(Event.id, Event.org_id)).all() == [(own_event, org.id)]
     user = db.get(User, uid(real))
     assert user is not None and user.email == "real@utexas.edu"
     assert db.exec(select(EventMember.event_id).where(EventMember.user_id == user.id)).all() == [own_event]
     assert db.exec(select(Profile).where(Profile.user_id == user.id)).first() is not None
     assert db.exec(select(ContactMethod.value).where(ContactMethod.user_id == user.id)).all() == ["real#1"]
     assert real.get(f"/api/events/{own_event}").status_code == 200  # still signed in
+    feed = real.get(f"/api/orgs/{org.id}/feed").json()["events"]
+    assert [e["event_id"] for e in feed] == [own_event]
 
-    # Seeding again works after a reset, and a second wipe finds nothing.
+    # Seeding again finds the kept org (through its kept creator) instead of making a second one.
     with Session(dbmod.get_engine()) as s:
-        assert len(seed.seed(s, fake_embeddings=True).users) == 16
-    assert seed.wipe(db)["users"] == 16
-    assert seed.wipe(db) == {"users": 0, "orgs": 0, "events": 0}
+        again = seed.seed(s, fake_embeddings=True)
+    assert again.org_id == org.id and again.users["morgan"] == seeded.users["morgan"]
+    assert db.exec(select(func.count()).select_from(Org)).one() == 1
+    approved = db.exec(select(func.count()).select_from(OrgMember)
+                       .where(OrgMember.org_id == org.id, OrgMember.status == "approved")).one()
+    assert approved == 17
+    feed = real.get(f"/api/orgs/{org.id}/feed").json()["events"]
+    assert {e["event_id"] for e in feed} == {own_event, *again.events.values()}
+
+    # The CLI says what it kept.
+    assert seed.main(["--wipe"]) == 0
+    out = capsys.readouterr().out
+    assert "Removed seed data: 15 user(s), 0 org(s), 2 event(s)" in out
+    assert "Kept (still used by real users): 1 seed user(s), 1 seed org(s)" in out
+    assert db.exec(select(Event.id)).all() == [own_event]
+
+
+def test_reset_keeps_seed_users_that_real_users_team_up_or_chat_with(seeded, login_as, db):
+    # A real host's own (unlisted) events, where seed users take part via dev login.
+    host = login_as("host@gmail.com", "Hannah Host")
+    ana, ben, cara = (as_seed(login_as, k) for k in ("ana", "ben", "cara"))
+    team_event = make_event(host)
+    for c in (host, ana, cara):
+        join(c, team_event)
+    group_id = form_group(host, ana, team_event)  # grouped with a seed user
+    thread_id = db.get(Group, group_id).thread_id
+    for c, text in ((host, "hi Ana"), (ana, "hi Hannah")):  # and chatting
+        assert c.post(f"/api/threads/{thread_id}/messages", json={"text": text}).status_code == 201
+    pending = send_ok(cara, team_event, uid(host))["request_id"]
+    study_event = make_event(host, type="informal")
+    join(host, study_event)
+    join(ben, study_event)
+    connection_id = accept_ok(host, send_ok(ben, study_event, uid(host))["request_id"])["connection_id"]
+
+    removed = seed.wipe(db)
+    # Ana, Ben and Cara are kept: deleting them would cascade into the real host's group, chat,
+    # connection and request. Nobody real uses the seed org, so it goes with the other 13 users.
+    assert removed == {"users": 13, "users_kept": 3, "orgs": 1, "orgs_kept": 0, "events": 2}
+    db.expire_all()
+    u = seeded.users
+    assert sorted(seed.seed_user_ids(db)) == sorted([u["ana"], u["ben"], u["cara"]])
+    assert db.get(Org, seeded.org_id) is None
+    assert set(db.exec(select(Event.id)).all()) == {team_event, study_event}
+    assert set(db.exec(select(GroupMember.user_id).where(GroupMember.group_id == group_id)).all()) == {
+        uid(host), u["ana"]}
+    assert [m["text"] for m in host.get(f"/api/threads/{thread_id}/messages").json()["messages"]] == [
+        "hi Ana", "hi Hannah"]
+    assert db.get(Connection, connection_id) is not None
+    assert db.get(Request, pending).status == "pending"
+    # Their seed-event data is gone: Ana is only in the real host's event now.
+    assert db.exec(select(EventMember.event_id).where(EventMember.user_id == u["ana"])).all() == [
+        team_event]
+    assert host.get(f"/api/groups/{group_id}").status_code == 200
+
+    # Seeding again reuses the kept seed users, and the next reset keeps them again.
+    with Session(dbmod.get_engine()) as s:
+        again = seed.seed(s, fake_embeddings=True)
+    assert len(again.users) == 16 and again.users["ana"] == u["ana"]
+    assert seed.wipe(db) == removed
 
 
 def test_reset_removes_seed_vectors_from_snowflake(seeded, monkeypatch, db):
@@ -209,6 +279,20 @@ def test_cli_seed_reset_and_wipe(capsys):
     assert table_counts() == first
 
     assert seed.main(["--wipe"]) == 0
+    assert table_counts()["User"] == 0
+
+
+def test_cli_refuses_reset_and_wipe_outside_local_without_yes(monkeypatch, capsys):
+    assert seed.main(["--fake-embeddings"]) == 0
+    capsys.readouterr()
+    before = table_counts()
+    monkeypatch.setattr(get_settings(), "app_env", "production")
+    for flag in ("--wipe", "--reset"):
+        assert seed.main([flag, "--fake-embeddings"]) == 2
+        err = capsys.readouterr().err
+        assert f"Refusing {flag}: APP_ENV is 'production'" in err and "--yes" in err
+    assert table_counts() == before
+    assert seed.main(["--wipe", "--yes"]) == 0
     assert table_counts()["User"] == 0
 
 

@@ -124,9 +124,8 @@ def test_manual_always_waits_and_admin_approves(admin, login_as):
     assert join(ben, org_id) == "pending"  # asking again keeps one request (and its message)
 
     listed = admin.get(f"/api/orgs/{org_id}/join-requests").json()["requests"]
-    assert [(r["user_id"], r["name"], r["email"], r["message"]) for r in listed] == [
-        (uid(ben), "Ben Li", "ben@gmail.com", "CS junior")
-    ]
+    assert [(r["user_id"], r["name"], r["email"], r["message"], r["roster_match"])
+            for r in listed] == [(uid(ben), "Ben Li", "ben@gmail.com", "CS junior", None)]
     assert listed[0]["requested_at"].endswith("Z")
 
     resp = admin.post(f"/api/orgs/{org_id}/join-requests/{uid(ben)}/approve")
@@ -159,6 +158,38 @@ def test_decline_and_request_again(admin, login_as):
     assert join(ben, org_id, message="please") == "pending"
     pending = admin.get(f"/api/orgs/{org_id}/join-requests").json()["requests"]
     assert [r["message"] for r in pending] == ["please"]
+
+
+@pytest.mark.parametrize("method", ["email_domain", "roster"])
+def test_request_after_decline_waits_for_admin_even_on_a_match(admin, login_as, method):
+    org_id = make_org(admin)  # manual: the request waits and the admin declines it
+    ben = login_as("ben@utexas.edu", "Ben Li")
+    assert join(ben, org_id) == "pending"
+    admin.post(f"/api/orgs/{org_id}/join-requests/{uid(ben)}/decline")
+
+    # Now ben matches the org's verification method...
+    if method == "roster":
+        upload(admin, org_id, "email\nben@utexas.edu\ncara@utexas.edu\n")
+        settings = {"verification": "roster"}
+    else:
+        settings = {"verification": "email_domain", "email_domains": ["utexas.edu"]}
+    assert admin.patch(f"/api/orgs/{org_id}", json=settings).status_code == 200
+    assert my_org(ben, org_id)["my_status"] == "declined"
+    # ...but asking again after a decline still goes to the admin queue,
+    assert join(ben, org_id, message="I'm on the list") == "pending"
+    assert join(ben, org_id) == "pending"
+    # and so do later settings changes and roster uploads.
+    assert admin.patch(f"/api/orgs/{org_id}", json=settings).status_code == 200
+    if method == "roster":
+        upload(admin, org_id, "email\ncara@utexas.edu\nben@utexas.edu\n")
+    assert my_org(ben, org_id)["my_status"] == "pending"
+    pending = admin.get(f"/api/orgs/{org_id}/join-requests").json()["requests"]
+    assert [(r["user_id"], r["message"]) for r in pending] == [(uid(ben), "I'm on the list")]
+
+    # A first request that matches is still auto-approved, and the admin can approve ben.
+    assert join(login_as("cara@utexas.edu", "Cara"), org_id) == "approved"
+    resp = admin.post(f"/api/orgs/{org_id}/join-requests/{uid(ben)}/approve")
+    assert resp.json() == {"user_id": uid(ben), "status": "approved"}
 
 
 def test_only_admins_decide(admin, login_as):
@@ -274,19 +305,49 @@ def test_roster_upload_and_match(admin, login_as, db):
         ("Dan Wu", "dan wu", "dan@school.edu"),
     ]
 
-    assert join(login_as("cara@x.com", "cara jones"), org_id) == "approved"
     assert join(login_as("DAN@school.edu", "Daniel"), org_id) == "approved"
+    # A name-only row is a hint for the admin, never an auto-approval (names are self-chosen).
+    cara = login_as("cara@x.com", "cara jones")
+    assert join(cara, org_id) == "pending"
     # The name matches, but that roster row has an email, so a different email waits.
-    assert join(login_as("dan.wu@gmail.com", "Dan Wu"), org_id) == "pending"
-    assert join(login_as("eve@x.com", "Eve"), org_id) == "pending"
+    dan = login_as("dan.wu@gmail.com", "Dan Wu")
+    assert join(dan, org_id) == "pending"
+    eve = login_as("eve@x.com", "Eve")
+    assert join(eve, org_id) == "pending"
+
+    pending = admin.get(f"/api/orgs/{org_id}/join-requests").json()["requests"]
+    assert [(r["user_id"], r["roster_match"]) for r in pending] == [
+        (uid(cara), "name"), (uid(dan), None), (uid(eve), None)
+    ]
+    approved = admin.get(f"/api/orgs/{org_id}/join-requests?status=approved").json()["requests"]
+    assert {r["email"]: r["roster_match"] for r in approved} == {
+        "ana@utexas.edu": None, "ben@gmail.com": "email", "dan@school.edu": "email",
+    }
+
+
+def test_roster_name_match_cannot_be_spoofed(admin, login_as):
+    """Anyone can set their Google display name to a listed name: that alone never gets them in."""
+    org_id = make_org(admin, verification="roster")
+    upload(admin, org_id, "name\nCara Jones\n")
+    impostor = login_as("mallory@evil.com", "Cara Jones")
+    assert join(impostor, org_id) == "pending"
+    # Re-uploading or re-saving the settings doesn't approve the name match either.
+    upload(admin, org_id, "name,email\nCara Jones,\n")
+    admin.patch(f"/api/orgs/{org_id}", json={"verification": "roster"})
+    assert my_org(impostor, org_id)["my_status"] == "pending"
+    [req] = admin.get(f"/api/orgs/{org_id}/join-requests").json()["requests"]
+    assert (req["user_id"], req["roster_match"]) == (uid(impostor), "name")
+    # The admin decides.
+    admin.post(f"/api/orgs/{org_id}/join-requests/{uid(impostor)}/decline")
+    assert my_org(impostor, org_id)["my_status"] == "declined"
 
 
 def test_roster_upload_replaces_list(admin, login_as):
     org_id = make_org(admin, verification="roster")
     assert upload(admin, org_id, "email\nold@x.com\nalso@x.com\n").json() == {"entries": 2}
-    assert upload(admin, org_id, "name\nNew Person\n").json() == {"entries": 1}
+    assert upload(admin, org_id, "email\nnew@x.com\n").json() == {"entries": 1}
     assert join(login_as("old@x.com", "Old"), org_id) == "pending"
-    assert join(login_as("new@x.com", "new person"), org_id) == "approved"
+    assert join(login_as("new@x.com", "New Person"), org_id) == "approved"
 
 
 def test_roster_on_manual_org_does_not_auto_approve(admin, login_as):

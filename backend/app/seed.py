@@ -1,15 +1,25 @@
-"""Demo seed data: `uv run python -m app.seed [--reset | --wipe] [--fake-embeddings]`.
+"""Demo seed data: `uv run python -m app.seed [--reset | --wipe] [--yes] [--fake-embeddings]`.
 
 Creates the "UT Austin" org with a structured event ("HackTX team-up") and an informal one
 ("Study buddies"), 15 profiled participants plus a host, a few groups, requests and a connection,
-then embeds every seed member so recommendations work.
+then embeds every seed member so recommendations work. The org verifies by email domain
+(utexas.edu) and is discoverable, so real attendees who sign in with Google join it on purpose.
 
-- Seed data is everything owned by a user whose email ends in @seed.squadup.dev: those users, the
-  orgs they created and the events they host (with everything inside them, including memberships
-  that real users added during a demo). Real users' accounts, profiles and contacts are never
-  touched, and neither is anything outside the seed orgs and events.
 - Running it again doesn't duplicate anything: each step looks for what it would create first.
-  `--reset` wipes the seed data and seeds again (the demo reset); `--wipe` only wipes.
+  `--reset` wipes the seed data and seeds again (the demo reset); `--wipe` only wipes. Both are
+  refused unless APP_ENV is local/test or `--yes` is given.
+- Seed users have an @seed.squadup.dev email and never signed in with Google. The wipe deletes:
+  1. Every event a seed user hosts, with everything inside it (members, questions, groups, chats,
+     requests, connections), including what real users added to it during a demo.
+  2. Every org a seed user created, unless a non-seed user hosts an event in it or has a
+     membership row in it (any status). Such an org is kept and only the seed users'
+     memberships in it are removed. Deleting an org also deletes its roster.
+  3. Every seed user who no longer appears in any kept data: a member, group member, message
+     sender, thread participant, connection or request party in a non-seed event, a member of
+     another org, or the creator of a kept org. The others are kept, since deleting a user
+     cascades into those rows (and a kept org's creator lets the next seed find the org again).
+  Nothing else is touched: real users' accounts, profiles, contacts, sessions, their events and
+  everything in them, and their memberships in kept orgs all survive.
 - Members, groups and requests go through the same service functions as the API, so profile_text
   is built the normal way. Embeddings use Gemini (embed_members, then the Snowflake sync) when
   GEMINI_API_KEY is configured; otherwise, with --fake-embeddings, or if Gemini fails, each
@@ -27,20 +37,23 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from sqlalchemy import inspect, null
-from sqlmodel import Session, delete, or_, select
+from sqlmodel import Session, delete, func, select
 
 from app import db as dbmod
 from app.config import BACKEND_DIR, EMBEDDING_DIM, get_settings
 from app.models import (
+    Connection,
     ContactMethod,
     Event,
     EventMember,
     Group,
+    GroupMember,
     Message,
     Org,
     OrgMember,
     Question,
     Request,
+    ThreadParticipant,
     User,
 )
 from app.models.base import utcnow
@@ -376,28 +389,74 @@ def seed_user_ids(db: Session) -> list[str]:
     )
 
 
+# Every column that points at users.id with ON DELETE CASCADE outside a user's own data (profile,
+# contacts, sessions, interview tokens), plus orgs.created_by. A seed user still referenced from
+# any of them after the seed events are gone is kept (see the module docstring).
+_USER_REFERENCES = (
+    EventMember.user_id, GroupMember.user_id, Message.sender_id, ThreadParticipant.user_id,
+    Connection.user_a_id, Connection.user_b_id, Request.sender_id, Request.target_user_id,
+    OrgMember.user_id, Event.host_id, Org.created_by,
+)
+
+
+def _still_referenced(db: Session, user_ids: list[str]) -> set[str]:
+    found: set[str] = set()
+    for column in _USER_REFERENCES:
+        found.update(db.exec(select(column).where(column.in_(user_ids)).distinct()).all())
+    return found
+
+
 def wipe(db: Session) -> dict[str, int]:
-    """Delete the seed users, the orgs they created and the events they host, with everything
-    inside those (FK cascades). Also removes those events' vectors from Snowflake. Commits."""
+    """Delete the seed data as the module docstring describes: the seed users' events, their orgs
+    unless real users use them, and the seed users nothing kept refers to. Also removes the
+    deleted events' vectors from Snowflake. Commits. Returns counts of what was deleted and kept."""
+    counts = {"users": 0, "users_kept": 0, "orgs": 0, "orgs_kept": 0, "events": 0}
     user_ids = seed_user_ids(db)
     if not user_ids:
-        return {"users": 0, "orgs": 0, "events": 0}
-    org_ids = list(db.exec(select(Org.id).where(Org.created_by.in_(user_ids))).all())
-    event_ids = list(
-        db.exec(
-            select(Event.id).where(or_(Event.host_id.in_(user_ids), Event.org_id.in_(org_ids)))
-        ).all()
-    )
-    if org_ids:
-        db.exec(delete(Org).where(Org.id.in_(org_ids)))
-    db.exec(delete(User).where(User.id.in_(user_ids)))
+        return counts
+    event_ids = list(db.exec(select(Event.id).where(Event.host_id.in_(user_ids))).all())
+    orgs = db.exec(select(Org).where(Org.created_by.in_(user_ids))).all()
+    kept_orgs = []
+    for org in orgs:
+        real_hosts = db.exec(
+            select(func.count()).select_from(Event)
+            .where(Event.org_id == org.id, Event.host_id.not_in(user_ids))
+        ).one()
+        real_members = db.exec(
+            select(func.count()).select_from(OrgMember)
+            .where(OrgMember.org_id == org.id, OrgMember.user_id.not_in(user_ids))
+        ).one()
+        if real_hosts or real_members:
+            log.info("Keeping org %r (%s): %d event(s) hosted and %d membership(s) held by "
+                     "non-seed users; removing only the seed users' memberships",
+                     org.name, org.id, real_hosts, real_members)
+            kept_orgs.append(org.id)
+    deleted_orgs = [org.id for org in orgs if org.id not in kept_orgs]
+
+    if event_ids:
+        db.exec(delete(Event).where(Event.id.in_(event_ids)))
+    if deleted_orgs:
+        db.exec(delete(Org).where(Org.id.in_(deleted_orgs)))
+    if kept_orgs:
+        db.exec(delete(OrgMember).where(OrgMember.org_id.in_(kept_orgs),
+                                        OrgMember.user_id.in_(user_ids)))
+    kept_users = _still_referenced(db, user_ids)
+    if kept_users:
+        log.info("Keeping %d seed user(s) still referenced by non-seed data: %s",
+                 len(kept_users), ", ".join(sorted(
+                     db.exec(select(User.email).where(User.id.in_(kept_users))).all())))
+    deleted_users = [u for u in user_ids if u not in kept_users]
+    if deleted_users:
+        db.exec(delete(User).where(User.id.in_(deleted_users)))
     db.commit()
     if event_ids and get_settings().snowflake_configured:
         try:
             snowflake_store.delete_events(event_ids)
         except snowflake_store.SnowflakeError as exc:
             log.warning("Could not remove the seed events' vectors from Snowflake: %s", exc)
-    return {"users": len(user_ids), "orgs": len(org_ids), "events": len(event_ids)}
+    counts.update(users=len(deleted_users), users_kept=len(kept_users), orgs=len(deleted_orgs),
+                  orgs_kept=len(kept_orgs), events=len(event_ids))
+    return counts
 
 
 # --- seed ----------------------------------------------------------------------------------------
@@ -689,17 +748,27 @@ def print_summary(result: SeedResult) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m app.seed",
-        description=f"Seed demo data (users @{SEED_DOMAIN}). Never touches other users.",
+        description=f"Seed demo data (users @{SEED_DOMAIN}). Never deletes other users' data.",
     )
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--reset", action="store_true",
-                      help="delete all seed data, then seed again (the demo reset)")
-    mode.add_argument("--wipe", action="store_true", help="only delete all seed data")
+                      help="delete the seed data (see the module docstring), then seed again")
+    mode.add_argument("--wipe", action="store_true", help="only delete the seed data")
+    parser.add_argument("--yes", action="store_true",
+                        help="allow --reset/--wipe when APP_ENV is not local or test")
     parser.add_argument("--fake-embeddings", action="store_true",
                         help="use deterministic local vectors instead of Gemini embeddings")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
     logging.getLogger("app").setLevel(logging.INFO)
+
+    settings = get_settings()
+    if (args.reset or args.wipe) and not settings.is_local and not args.yes:
+        flag = "--reset" if args.reset else "--wipe"
+        print(f"Refusing {flag}: APP_ENV is {settings.app_env!r}, not local or test, so this may "
+              "be a shared database with real users. Seed events and the seed users' data are "
+              "deleted (real users' data is kept). Pass --yes to confirm.", file=sys.stderr)
+        return 2
 
     engine = dbmod.get_engine()
     problem = _check_migrated(engine)
@@ -711,6 +780,9 @@ def main(argv: list[str] | None = None) -> int:
             counts = wipe(db)
             print(f"Removed seed data: {counts['users']} user(s), {counts['orgs']} org(s), "
                   f"{counts['events']} event(s)")
+            if counts["users_kept"] or counts["orgs_kept"]:
+                print(f"Kept (still used by real users): {counts['users_kept']} seed user(s), "
+                      f"{counts['orgs_kept']} seed org(s)")
             if args.wipe:
                 return 0
         result = seed(db, fake_embeddings=args.fake_embeddings)
