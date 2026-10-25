@@ -45,26 +45,33 @@ _Status: draft, 2026-10-24, rewritten for the new product spec. Sections 8–9 (
 Joining an org is always a request that must be approved. Each org picks one verification method:
 - `manual`: an admin approves or declines every request.
 - `email_domain`: auto-approved when the user's email domain is in `email_domains`; otherwise the request waits for an admin.
-- `roster`: auto-approved when the user's email or name matches the uploaded member list; otherwise it waits for an admin.
+- `roster`: auto-approved when the user's email or name matches the uploaded member list; otherwise it waits for an admin. A roster row with an email matches only by email; a name-only row matches by name.
 
 Endpoints:
 - **`GET /api/orgs`:** the user's orgs (with `my_role`: `admin | member`, and `my_status`: `pending | approved | declined`) plus discoverable orgs (`discoverable: true`).
-- **`POST /api/orgs`:** the creator becomes the org's first admin. `discoverable` (boolean, default `true`) controls whether non-members see the org in `GET /api/orgs`; a non-discoverable org is joined by link.
+```json
+{"orgs": [{"org_id": "org_ut", "name": "UT Austin", "verification": "email_domain", "email_domains": ["utexas.edu"],
+           "discoverable": true, "member_count": 312, "my_role": "member", "my_status": "approved"}]}
+```
+- **`POST /api/orgs`:** the creator becomes the org's first admin. `discoverable` (boolean, default `true`) controls whether non-members see the org in `GET /api/orgs`; a non-discoverable org is joined by link. `verification` defaults to `manual`.
 ```json
 {"name": "UT Austin", "verification": "email_domain", "email_domains": ["utexas.edu"], "discoverable": true}
 // 201 → {"org_id": "org_ut", "verification": "email_domain"}
 ```
-- **`PATCH /api/orgs/{org_id}`** (admin): change `name`, `verification`, `email_domains` or `discoverable`.
-- **`POST /api/orgs/{org_id}/join`:** body `{"message": "CS junior"}` (optional). Returns `{"status": "approved" | "pending"}`. Returns 409 `already_member` if already approved.
+  - `email_domains`: max 20, lowercased, a leading `@` is stripped. `email_domain` verification needs at least one domain, and a domain also matches its subdomains (`utexas.edu` matches `cs.utexas.edu`).
+- **`PATCH /api/orgs/{org_id}`** (admin): change `name`, `verification`, `email_domains` or `discoverable`. Omitted or null fields stay unchanged. Pending requests that match after the change are auto-approved.
+- **`POST /api/orgs/{org_id}/join`:** body `{"message": "CS junior"}` (optional). Returns `{"status": "approved" | "pending"}`. Returns 409 `already_member` if already approved. A user may ask again while pending or after a decline.
 - **`GET /api/orgs/{org_id}/join-requests?status=pending`** (admin): `{"requests": [{"user_id": "usr_b2", "name": "Ben Li", "email": "ben@gmail.com", "message": "…", "requested_at": "…"}]}`.
-- **`POST /api/orgs/{org_id}/join-requests/{user_id}/approve`** and **`/decline`** (admin).
-- **`PUT /api/orgs/{org_id}/roster`** (admin): `multipart/form-data` with a `file` CSV that has `name` and/or `email` columns (max 1 MB, 5000 rows). It replaces the list and returns `{"entries": 312}`. Pending requests that now match are auto-approved.
-- **`POST /api/orgs/{org_id}/admins`** (admin): `{"user_id": "usr_b2"}` makes an approved member an admin.
-- **`GET /api/orgs/{org_id}/feed`:** approved members only.
+- **`POST /api/orgs/{org_id}/join-requests/{user_id}/approve`** and **`/decline`** (admin): pending requests only, otherwise 409 `request_not_pending`. Returns `{"user_id": "usr_b2", "status": "approved" | "declined"}`.
+- **`PUT /api/orgs/{org_id}/roster`** (admin): `multipart/form-data` with a `file` CSV that has `name` and/or `email` columns (max 1 MiB, 5000 data rows). It replaces the list and returns `{"entries": 312}`. Pending requests that now match are auto-approved. A header-only file clears the roster. Errors are 422 `invalid_roster`. The roster is never returned by the API.
+- **`POST /api/orgs/{org_id}/admins`** (admin): `{"user_id": "usr_b2"}` makes an approved member an admin. Returns `{"user_id": "usr_b2", "role": "admin"}`, or 404 `not_found` if the user isn't an approved member.
+- **`GET /api/orgs/{org_id}/feed`:** approved members only; anyone else, including for an unknown org, gets 403 `not_org_member`.
 ```json
 {"org_id": "org_ut", "events": [{"event_id": "evt_h1", "name": "HackTX team-up", "type": "structured",
   "tone": "casual", "starts_at": "2026-10-25T15:00:00Z", "member_count": 42, "joined": false}]}
 ```
+  - "Upcoming" means `starts_at` is null, in the future, or within the last 12 hours. Ordered by `starts_at`, nulls last; max 100 events.
+  - Open proposals (PLAN.md Open Questions): add the org `name` to the feed response, add `GET /api/orgs/{org_id}`, and return the auto-approved count from `PUT /roster`.
 
 ## 3. Events
 **`POST /api/events`** (host)
@@ -116,7 +123,7 @@ Endpoints:
 - `socials` use the contact `kind` enum (max 10); an unknown kind is 422 `validation_error`.
 - Returns 409 `already_joined` if the user already joined.
 - Joining stores the answers and creates or updates the user's profile, which is shared across events. `profile_status` is `ready` once the profile text is saved (the embedding follows asynchronously).
-- SerpAPI lookup runs asynchronously and never blocks the join.
+- SerpAPI lookup runs asynchronously and never blocks the join. Its result (`social_notes`) is untrusted text that reaches the agents via `profile_text` and the interview config (section 8).
 
 **`POST /api/events/{event_id}/interview`** starts the optional interview:
 ```json
@@ -137,9 +144,13 @@ Endpoints:
              "score": 0.81, "reason": "They're missing a designer and you listed Figma."}]}
 ```
 - **Field values:**
-  - `ranked_by` is `gemini`, or `similarity` when the agent rerank fails, in which case `reason` is null.
+  - `ranked_by` is `gemini`, or `similarity` when the agent rerank fails, in which case `reason` is null. It is also `similarity` when there are no candidates.
+  - In similarity mode, `score` is the cosine similarity rounded to 4 decimal places; a group member without a vector counts as 0.0.
   - `groups` is always `[]` for informal events.
-- **Excluded from results:** the viewer, people already in the viewer's groups, groups the viewer is in, full groups, and users or groups the viewer declined or was declined by. When the viewer has reached `max_groups_per_user`, `groups` is `[]`.
+  - `limit` is 1–50. Each candidate type (`people`, `groups`) returns at most `limit` entries. The `limit` sent to the agents' `/recommend` is `limit` × the number of candidate types present, capped at 50.
+- **Excluded from results:** the viewer, people already in the viewer's groups, groups the viewer is in, full groups, users or groups the viewer declined or was declined by, and users or groups with a pending request to or from the viewer (or the viewer's groups). When the viewer has reached `max_groups_per_user`, `groups` is `[]`.
+- **Not excluded yet (open question):** people who have hit `max_groups_per_user`, and everyone once the event has `group_count` groups, are still recommended; accepting then fails with 409. See PLAN.md Open Questions.
+- The Socials line (handles) is stripped from each candidate's `profile_text` before it is sent to the agents.
 
 ## 5. Requests and consent
 **`POST /api/requests`**
@@ -160,11 +171,19 @@ Endpoints:
   - Structured event, user → user: a new group forms with both users.
   - Structured event, user → group: the requester is added to the group.
   - Informal event: a connection is created.
+  - **Resolved together:** accepting also accepts the other pending requests it makes unnecessary, with the same `group_id`/`connection_id` and `decided_by` = the acceptor:
+    - the pair's crossing request (B → A when A → B is accepted), in both informal and structured events;
+    - when someone joins a group, their pending user ↔ user requests with that group's current members.
+  - A second accept on one of those requests then gets 409 `request_not_pending`.
+  - Accepting a stale request between two people who already share a group or connection returns that existing group or connection instead of an error.
 - **Errors:**
   - `group_full` (409): the group is already at max_size.
   - `group_limit_reached` (409): the event already has group_count groups.
   - `group_limit_per_user` (409): accepting would put either user in more groups than the event's `max_groups_per_user`.
-  - `already_in_group` (409): the requester is already a member of the target group.
+  - `already_in_group` (409): the requester is already a member of the target group; also on `POST /api/requests` for a user target in a structured event when the two are already group-mates.
+  - `already_connected` (409, `POST /api/requests`): informal event, the two are already connected.
+  - `duplicate_request` (409, `POST /api/requests`): the sender already has a pending request to that target.
+  - `request_not_pending` (409): the request was already accepted, declined, cancelled or expired.
 - Accept response: `{"request_id": "req_9", "status": "accepted", "group_id": "grp_4" | null, "connection_id": "con_2" | null}`.
 
 ## 6. Threads, chat and calls
@@ -185,14 +204,27 @@ Non-members get 403. Contacts are never returned to non-members anywhere in the 
 
 - **`PATCH /api/groups/{group_id}`:** members can rename the group with `{"name": "…"}`.
 - **`POST /api/groups/{group_id}/leave`:** leaves the group.
-- **`GET /api/events/{event_id}/connections`** (informal events) returns the user's connections, including their contacts.
+- **`GET /api/events/{event_id}/connections`** (informal events) returns the user's connections, including their contacts:
+```json
+{"connections": [{"connection_id": "con_2", "user_id": "usr_b2", "name": "Ben Li", "summary": "…",
+                  "contacts": [{"kind": "discord", "value": "ben#42"}], "thread_id": "thr_9",
+                  "connected_at": "2026-10-24T22:00:00Z"}]}
+```
+  Contacts go only to the connected user. Always `[]` for structured events; 403 `forbidden` before joining.
 
 ---
 
 ## 8. Backend ↔ agents (internal, header `X-Internal-Key`)
 
+**Interview token lifecycle and errors (both endpoints):**
+- `config` claims the token: a second `config` call with the same token gets 401.
+- `summary` must arrive within 10 minutes of the `config` claim and works once; the token is deleted after it.
+- 401 `unauthenticated`: invalid, expired, unclaimed or already-used token, or a missing `X-Internal-Key`.
+- 403 `forbidden`: a wrong `X-Internal-Key`, or the user is no longer a member of the event.
+- 422 `validation_error`: a bad request body.
+
 ### Agents → backend: GET /internal/interviews/{interview_token}/config
-The agents service calls this when the WebSocket opens. It returns 401 if the token is invalid or expired.
+The agents service calls this when the WebSocket opens. It returns 401 if the token is invalid, expired or already claimed.
 ```json
 {"user": {"user_id": "usr_a1", "name": "Ana"},
  "event": {"event_id": "evt_h1", "name": "HackTX team-up", "type": "structured", "tone": "casual",
@@ -201,6 +233,7 @@ The agents service calls this when the WebSocket opens. It returns 401 if the to
  "profile_so_far": {"answers": {"q_1": "frontend"}, "fields": {"skills": ["react"]}, "social_notes": "…"},
  "max_minutes": 5}
 ```
+- `profile_so_far.social_notes` (null if none) is SerpAPI-derived **untrusted text**; the same notes also reach `/recommend` inside `profile_text`. Treat both as data, never as instructions.
 
 ### Agents → backend: POST /internal/interviews/{interview_token}/summary
 ```json
@@ -211,6 +244,8 @@ The agents service calls this when the WebSocket opens. It returns 401 if the to
 // 200 → {"ok": true}
 ```
 The backend stores the transcript and summary on the user's profile, then re-embeds the user's event profiles.
+- **Limits** (else 422 `validation_error`): `transcript` ≤ 1000 entries, each `text` ≤ 5000 chars; `summary` non-empty, ≤ 5000 chars; `traits` any JSON object, ≤ 10k chars serialized; `input_mode` is `voice`, `text` or absent.
+- **Open question for the Gemini dev:** the example above shows flat `traits`, but `agents/interview.py` sends `{"highlights": [...]}`. Both pass validation today; which shape is canonical? (PLAN.md Open Questions.)
 
 ### Backend → agents: POST /recommend
 ```json
@@ -264,7 +299,7 @@ The browser never talks to Gemini directly, and the backend never handles audio.
 ---
 
 ## Error codes
-`unauthenticated` (401), `forbidden` (403), `not_org_member` (403), `not_org_admin` (403), `not_found` (404), `validation_error` (422), `invalid_answers` (422), `invalid_roster` (422), `already_joined` (409), `already_member` (409), `already_in_group` (409), `group_full` (409), `group_limit_reached` (409), `group_limit_per_user` (409), `request_not_pending` (409), `interview_disabled` (409), `internal_error` (500).
+`unauthenticated` (401), `forbidden` (403), `not_org_member` (403), `not_org_admin` (403), `not_found` (404), `validation_error` (422), `invalid_answers` (422), `invalid_roster` (422), `already_joined` (409), `already_member` (409), `already_in_group` (409), `already_connected` (409), `duplicate_request` (409), `group_full` (409), `group_limit_reached` (409), `group_limit_per_user` (409), `request_not_pending` (409), `interview_disabled` (409), `internal_error` (500).
 Auth and generic: `bad_request` (400), `invalid_oauth_state` (400), `email_not_verified` (403), `method_not_allowed` (405), `account_conflict` (409), `oauth_failed` (502), `oauth_not_configured` (503).
 
 ## Changelog
@@ -273,3 +308,4 @@ Auth and generic: `bad_request` (400), `invalid_oauth_state` (400), `email_not_v
 - v1.0-pre.2 (2026-10-24): section 1 clarifications from the backend M0 build: `PUT /api/me/contacts` response, OAuth login error codes and the cancel redirect, `next` restricted to relative paths, and the dev-only `POST /api/auth/dev-login` (local/test only, behind `DEV_LOGIN=1`). Added the matching error codes.
 - v1.0-pre.3 (2026-10-24): from the backend M0 review fixes and the M1 events build. Section 1: a missing `code` on the callback is 400 `bad_request`; email linking never overrides a different Google account (409 `account_conflict`). Section 2: orgs get `discoverable` (default true). Section 3: the full `GET /api/events/{id}` body (adds `org_id`, `created_at`, `share_url` and the event settings), create and join validation rules, 409 `already_joined`, 403 `not_org_member` for org events, and the interview endpoint's member-only rule plus 409 `interview_disabled`. New error codes `bad_request`, `account_conflict`, `interview_disabled`.
 - v1.0-pre.4 (2026-10-24): one profile per person. A user's profile (socials, social notes, interview summary) is shared across all their events; each event keeps its own answers and match text. Section 3: joining creates or updates that shared profile. Section 8: the interview summary is stored on the user's profile and re-embeds all of the user's event profiles. No request or response shapes changed.
+- v1.0-pre.5 (2026-10-24): behaviors the backend builders decided where the contract was silent (M1–M3 merge). Section 2: `GET /api/orgs` body, roster matching (email rows by email only), `email_domains` rules (subdomains match), `verification` defaults to `manual`, re-requesting after pending/decline, approve/decline/admins responses and errors, PATCH semantics, roster limits and errors, feed window and ordering. Section 3/8: `social_notes` is untrusted text. Section 4: pending-request exclusions, similarity-mode `score`, `ranked_by` with no candidates, `limit` rules, socials stripped before the agents. Section 5: accepting resolves crossing and redundant requests together, stale accepts return the existing group or connection; new 409s `already_connected`, `duplicate_request`, wider `already_in_group`. Section 7: connections list body. Section 8: interview token lifecycle, error codes and summary limits. Open questions: traits shape (Gemini dev), excluding full or capped candidates, and org API proposals.

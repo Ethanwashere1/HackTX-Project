@@ -36,7 +36,7 @@ _Last updated: 2026-10-24 (HackTX weekend). **Pivoted to the new product spec.**
 **Recommendation pipeline:**
 1. A profile is saved or updated: questionnaire answers + SerpAPI social info + interview summary.
 2. The backend embeds the profile text with the Gemini embeddings API, stores the vector in TigerData (pgvector), and syncs it to Snowflake.
-3. `GET recommendations` runs a Snowflake similarity query for the top ~20 candidates in the same event. It excludes yourself, your current group-mates, and people or groups you've declined. Groups that are already full are excluded too.
+3. `GET recommendations` runs a Snowflake similarity query for the top ~20 candidates in the same event. It excludes yourself, your current group-mates, people or groups you've declined, and anyone with a pending request to or from you. Groups that are already full are excluded too.
 4. The backend calls agents `POST /recommend` to rerank the candidates to the top N, each with a reason.
 5. On agent failure or timeout, the user gets the similarity order without reasons (`ranked_by: "similarity"`).
 
@@ -68,7 +68,7 @@ _Last updated: 2026-10-24 (HackTX weekend). **Pivoted to the new product spec.**
 - **Frontend devs (`frontend/`):** all UI, plus all unit and regression testing of the web app (frontend). Backend tests stay with the Claude tester.
 
 ## Contract summary
-See [docs/CONTRACT.md](docs/CONTRACT.md) (DRAFT v1.0-pre). It covers:
+See [docs/CONTRACT.md](docs/CONTRACT.md) (DRAFT v1.0-pre.5). It covers:
 - the session-cookie auth flow
 - `/api` endpoints for orgs, events, joining, recommendations, requests, threads/chat/call and groups
 - `/internal` endpoints, `POST /recommend` and the interview WebSocket between the backend and agents
@@ -129,31 +129,31 @@ See [docs/CONTRACT.md](docs/CONTRACT.md) (DRAFT v1.0-pre). It covers:
 - [x] **M0** (builder) Google OAuth (authorization code flow with a state check), httpOnly session cookie, `GET /api/me`, logout — done when the frontend login round-trips (depends on: Google client ID). _Code-complete and tested against a mocked Google; not yet tried with real Google credentials or the frontend. Dev-only `POST /api/auth/dev-login` for local use._
 - [x] **M0** (builder) Schema — done when migrations apply cleanly (on the embedded Postgres; plus InterviewToken and UserSession). Tables: User, ContactMethod, Org, OrgMember (role, status), OrgRosterEntry, Event (incl. `max_groups_per_user`), Question, EventMember (answers), Profile (summary, embedding), Group, GroupMember, Request, Thread, Message, Connection
 - [x] **M1** (builder) Events create/get/join with host parameters, questionnaire validation and the required profile fields — done when create → join stores the answers (depends on: schema). _Also `POST /api/events/{id}/interview` (hashed 10-min token). Join builds `profile_text`; the embedding and SerpAPI steps are hooks in `app/services/profiles.py` for their own tasks. M0 review fixes applied in the same pass._
-- [ ] **M1** (builder) Embeddings and Snowflake — done when a new joiner appears in Snowflake within seconds (depends on: Snowflake account):
+- [x] **M1** (builder) Embeddings and Snowflake — done when a new joiner appears in Snowflake within seconds (depends on: Snowflake account). _Done with mocked tests only; the Snowflake vector SQL (`PARSE_JSON(...)::ARRAY::VECTOR(FLOAT,768)`, MERGE, `VECTOR_COSINE_SIMILARITY`) has not been run against real Snowflake._
   - embed the profile text with Gemini embeddings and store it in pgvector
   - sync it to a Snowflake table
-- [ ] **M1** (builder) `GET /api/events/{id}/recommendations` — done when the user gets ranked people and open groups, and the fallbacks are tested (depends on: embeddings, agents stub):
+- [x] **M1** (builder) `GET /api/events/{id}/recommendations` — done when the user gets ranked people and open groups, and the fallbacks are tested (depends on: embeddings, agents stub). _Done; fallback chain Snowflake → pgvector → agents rerank → similarity order._
   - Snowflake similarity, with exclusion rules and full groups removed
   - pgvector fallback
   - agents `/recommend` rerank, with a similarity-order fallback
-- [ ] **M1** (builder) Requests and consent — done when no group ever exceeds max_size or group_count and no user exceeds the event's `max_groups_per_user`, including when two accepts arrive at once (depends on: schema):
+- [x] **M1** (builder) Requests and consent — done when no group ever exceeds max_size or group_count and no user exceeds the event's `max_groups_per_user`, including when two accepts arrive at once (depends on: schema). _Done, with concurrency tests; crossing requests now resolve together (one group or connection)._
   - `POST /api/requests` to a user or a group
   - accept/decline
   - a group forms or a member is added only after both sides accept
   - enforce max_size and group_count with a row lock
-- [ ] **M1** (builder) `GET /api/groups/{id}` team page — done when it's tested for members vs non-members (depends on: requests):
+- [x] **M1** (builder) `GET /api/groups/{id}` team page — done when it's tested for members vs non-members (depends on: requests). _Ticked from the code: `routers/groups.py` plus `tests/test_threads_groups.py` (members-only page, contacts never leak, rename, leave)._
   - members, roles and summaries
   - contact methods shown only to members
-- [ ] **M1** (builder) Seed script: an org, one structured and one informal event, and about 15 profiled users with embeddings — done when recommendations work on seed data (depends on: embeddings)
-- [ ] **M2** (builder) Internal endpoints `interview-config` and `interview-summary`, plus the interview token — done when the agents service round-trips and the profile re-embeds (depends on: schema)
-- [ ] **M2** (builder) Threads and messages (created with each request and group), plus a call link (Jitsi room URL) — done when two users chat via polling (depends on: requests)
-- [ ] **M2** (builder) Informal events: 1:1 connection requests and a connections list, no groups — done when tested (depends on: requests)
-- [ ] **M3** (builder) Orgs — done when only approved members see the feed and only org admins can approve (depends on: schema):
+- [x] **M1** (builder) Seed script: an org, one structured and one informal event, and about 15 profiled users with embeddings — done when recommendations work on seed data (depends on: embeddings). _Done: `uv run python -m app.seed [--fake-embeddings|--reset|--wipe]`; also covers the M4 demo reset script._
+- [x] **M2** (builder) Internal endpoints `interview-config` and `interview-summary`, plus the interview token — done when the agents service round-trips and the profile re-embeds (depends on: schema). _Done; token rules and limits in CONTRACT section 8. Traits shape is an open question (below)._
+- [x] **M2** (builder) Threads and messages (created with each request and group), plus a call link (Jitsi room URL) — done when two users chat via polling (depends on: requests). _Ticked from the code: `routers/threads.py` plus `tests/test_threads_groups.py` (request-thread chat, stable call URL, group thread follows membership)._
+- [x] **M2** (builder) Informal events: 1:1 connection requests and a connections list, no groups — done when tested (depends on: requests). _Done; connections list shape in CONTRACT section 7._
+- [x] **M3** (builder) Orgs — done when only approved members see the feed and only org admins can approve (depends on: schema). _Done; builder-decided details (roster matching, feed window, PATCH semantics) in CONTRACT section 2._
   - create an org (creator becomes admin) and choose a verification method: `manual`, `email_domain`, or `roster`
   - join requests: `email_domain` and `roster` auto-approve on a match, otherwise the request waits for an admin; `manual` always waits
   - admins approve/decline requests and upload a roster (CSV of names and/or emails)
   - feed of upcoming events; creating events inside an org
-- [ ] **M3** (builder) SerpAPI social lookup on join or profile update — done when a failed lookup still lets the user join and get recommendations (depends on: SerpAPI key):
+- [x] **M3** (builder) SerpAPI social lookup on join or profile update — done when a failed lookup still lets the user join and get recommendations (depends on: SerpAPI key). _Done; not verified against real SerpAPI. `social_notes` is untrusted text that reaches the agents._
   - optional and cached
   - manual handle entry as a fallback
   - the result feeds the profile text
@@ -161,7 +161,7 @@ See [docs/CONTRACT.md](docs/CONTRACT.md) (DRAFT v1.0-pre). It covers:
 - [ ] **M4** (lead + builder) Deploy on Vultr — done when the demo script runs on the public URL:
   - Docker Compose: backend, agents, frontend build, Caddy HTTPS
   - .tech domain, env and secrets, OAuth redirect URIs
-  - demo reset script
+  - demo reset script (_done via `app.seed --reset`_)
 
 ## Risks
 - **Live voice audio and latency** (PCM formats, mic permissions; HTTPS needed off localhost). Mitigation: text fallback from M2, and an early HTTPS deploy test.
@@ -184,3 +184,6 @@ See [docs/CONTRACT.md](docs/CONTRACT.md) (DRAFT v1.0-pre). It covers:
 9. Does the Gemini dev agree with `/recommend`, the interview WebSocket and the audio formats? **Yes.**
 10. Can a user be in more than one group per event? **Decided:** one group per structured event by default; the host can raise it with the event's `max_groups_per_user` setting.
 11. Credentials: real TigerData, Google OAuth, Gemini, Snowflake and SerpAPI values come later. Until then `backend/.env` holds placeholders.
+12. **For the Gemini dev:** interview summary `traits` shape. CONTRACT section 8 shows flat traits (`{"working_style": …}`), but `agents/interview.py` sends `{"highlights": [...]}`. The backend accepts any JSON object, so both work today; which shape is canonical?
+13. Recommendations: should people who have hit `max_groups_per_user`, or everyone once the event has `group_count` groups, be excluded? Today they're still recommended and the accept fails with 409.
+14. Org API proposals (frontend input wanted): add `name` to the feed response; add `GET /api/orgs/{org_id}`; return the auto-approved count from `PUT /roster`.
