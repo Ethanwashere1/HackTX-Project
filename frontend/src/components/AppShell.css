@@ -1,0 +1,236 @@
+.shell {
+  display: flex;
+  min-height: 100vh;
+  background: var(--su-surface);
+}
+
+.shell-sidebar {
+  width: var(--su-sidebar-w);
+  background: var(--su-sidebar);
+  color: #fff;
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+}
+
+.shell-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 1.4rem 1.25rem;
+  font-weight: 700;
+  font-size: 1.25rem;
+}
+
+.shell-mark {
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  background: var(--su-teal);
+  display: grid;
+  place-items: center;
+  color: #fff;
+}
+
+.shell-org {
+  margin: 0 0.75rem;
+  width: calc(100% - 1.5rem);
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  padding: 0.65rem 0.75rem;
+  color: #fff;
+  text-align: left;
+}
+
+.shell-org-mono {
+  width: 26px;
+  height: 26px;
+  border-radius: 5px;
+  background: var(--su-teal-deep);
+  color: var(--su-teal-bright);
+  display: grid;
+  place-items: center;
+  font-size: 0.65rem;
+  font-weight: 700;
+}
+
+.shell-org-copy {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.shell-org-copy strong {
+  font-size: 0.8125rem;
+}
+
+.shell-org-copy small {
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 0.625rem;
+}
+
+.shell-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 1rem 0.75rem 0;
+}
+
+.shell-nav-link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 40px;
+  padding: 0 0.75rem;
+  border-radius: 7px;
+  color: rgba(255, 255, 255, 0.78);
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+
+.shell-nav-link.is-active,
+.shell-nav-link:hover {
+  background: var(--su-teal);
+  color: #fff;
+}
+
+.shell-badge {
+  min-width: 1.25rem;
+  height: 1rem;
+  border-radius: 999px;
+  background: #ecd5a8;
+  color: #7a3a12;
+  font-size: 0.65rem;
+  font-weight: 700;
+  display: grid;
+  place-items: center;
+  padding: 0 0.35rem;
+}
+
+.shell-spaces {
+  padding: 1.5rem 1.25rem 0;
+  font-size: 0.8125rem;
+}
+
+.shell-spaces p {
+  margin: 0 0 0.75rem;
+  color: rgba(255, 255, 255, 0.35);
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.shell-spaces a {
+  display: block;
+  color: rgba(255, 255, 255, 0.8);
+  margin-bottom: 0.55rem;
+}
+
+.shell-foot {
+  margin-top: auto;
+  padding: 1rem 0 1.25rem;
+}
+
+.shell-foot > a {
+  display: block;
+  padding: 0.65rem 1.25rem;
+  color: rgba(255, 255, 255, 0.75);
+  font-size: 0.8125rem;
+}
+
+.shell-user {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  padding: 0.75rem 1.25rem 0;
+}
+
+.shell-user strong {
+  display: block;
+  font-size: 0.8125rem;
+}
+
+.shell-user button {
+  border: none;
+  background: none;
+  color: rgba(255, 255, 255, 0.45);
+  padding: 0;
+  font-size: 0.7rem;
+}
+
+.shell-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.shell-top {
+  height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 2rem;
+  border-bottom: 1px solid var(--su-border);
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(8px);
+  position: sticky;
+  top: 0;
+  z-index: 5;
+}
+
+.shell-promise {
+  margin: 0;
+  color: var(--su-text-muted);
+  font-size: 0.85rem;
+}
+
+.shell-utils {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+}
+
+.shell-invites {
+  border: 1px solid var(--su-border);
+  border-radius: 999px;
+  padding: 0.4rem 0.85rem;
+  font-size: 0.8rem;
+  background: #fff;
+}
+
+@media (max-width: 900px) {
+  .shell {
+    flex-direction: column;
+  }
+
+  .shell-sidebar {
+    width: 100%;
+    height: auto;
+    position: relative;
+  }
+
+  .shell-nav {
+    flex-direction: row;
+    overflow-x: auto;
+    padding-bottom: 0.75rem;
+  }
+
+  .shell-spaces,
+  .shell-foot > a,
+  .shell-promise {
+    display: none;
+  }
+
+  .shell-top {
+    padding: 0 1rem;
+  }
+}

@@ -1,0 +1,128 @@
+.feed-hero {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: flex-start;
+}
+
+.feed-banner {
+  margin: 0.5rem 0 1.5rem;
+  border-radius: 16px;
+  min-height: 180px;
+  padding: 1.75rem;
+  color: #fff;
+  background-size: cover;
+  background-position: right center;
+  overflow: hidden;
+}
+
+.feed-banner .eyebrow {
+  margin: 0 0 0.5rem;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--su-teal-bright);
+}
+
+.feed-banner h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1.75rem;
+  letter-spacing: -0.02em;
+}
+
+.feed-banner p:last-child {
+  margin: 0;
+  max-width: 28rem;
+  color: rgba(255, 255, 255, 0.75);
+  line-height: 1.5;
+}
+
+.feed-toolbar {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 0.75rem;
+  margin-bottom: 1.5rem;
+}
+
+.feed-section-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.85rem;
+}
+
+.feed-section-head h3 {
+  margin: 0;
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+}
+
+.feed-section-head a {
+  color: var(--su-teal);
+  font-weight: 600;
+  font-size: 0.875rem;
+}
+
+.feed-card {
+  padding: 1.15rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.feed-card-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  color: var(--su-text-muted);
+  font-size: 0.75rem;
+}
+
+.feed-card h4 {
+  margin: 0;
+  font-size: 1.15rem;
+}
+
+.feed-card p {
+  margin: 0;
+  color: var(--su-text-muted);
+  line-height: 1.5;
+  font-size: 0.9rem;
+}
+
+.feed-meta {
+  font-size: 0.8rem !important;
+}
+
+.feed-card .su-btn {
+  margin-top: auto;
+  width: fit-content;
+}
+
+.feed-aside {
+  margin-top: 1.5rem;
+  padding: 1.25rem;
+}
+
+.feed-aside h3 {
+  margin: 0 0 0.75rem;
+}
+
+.feed-aside ol {
+  margin: 0 0 1rem;
+  padding-left: 1.1rem;
+  color: var(--su-text-muted);
+  line-height: 1.7;
+}
+
+@media (max-width: 900px) {
+  .feed-hero {
+    flex-direction: column;
+  }
+
+  .feed-toolbar {
+    grid-template-columns: 1fr;
+  }
+}
