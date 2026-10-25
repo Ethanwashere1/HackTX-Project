@@ -1,0 +1,78 @@
+# SquadUp production stack. Run from deploy/:  docker compose up -d --build
+# See deploy/README.md. Secrets live in backend/.env and agents/.env (never committed);
+# deploy/.env only sets DOMAIN. Values that follow from the domain or the compose network are
+# set below under `environment:`, which overrides the same names in the env files.
+
+name: squadup
+
+services:
+  backend:
+    build:
+      context: ../backend
+    env_file: ../backend/.env
+    environment:
+      APP_ENV: production
+      FRONTEND_ORIGIN: https://${DOMAIN:?set DOMAIN in deploy/.env}
+      OAUTH_REDIRECT_URL: https://${DOMAIN}/api/auth/google/callback
+      AGENTS_URL: http://agents:8000
+      AGENTS_WS_URL: wss://${DOMAIN}/agents/ws/interview
+      DEV_LOGIN: "0"
+    expose:
+      - "8001"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=4)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s # alembic upgrade head runs first
+
+  # Gemini agents service. agents/Dockerfile is owned by the agents team and must listen on 8000.
+  agents:
+    build:
+      context: ../agents
+    env_file: ../agents/.env
+    environment:
+      BACKEND_URL: http://backend:8001
+    expose:
+      - "8000"
+    restart: unless-stopped
+    healthcheck:
+      # Assumes a Python base image (as the service is FastAPI).
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # One-shot: builds frontend/ (npm ci && npm run build), copies dist/ into the shared volume
+  # that Caddy serves, then exits. Re-run with `docker compose up -d --build frontend`.
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: ../deploy/frontend.Dockerfile
+    volumes:
+      - frontend_dist:/out
+    restart: "no"
+
+  caddy:
+    image: caddy:2.10.2-alpine
+    environment:
+      DOMAIN: ${DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp" # HTTP/3
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - frontend_dist:/srv:ro
+      - caddy_data:/data # certificates: keep this volume or you hit Let's Encrypt rate limits
+      - caddy_config:/config
+    restart: unless-stopped
+    # No depends_on: Caddy resolves upstreams per request, so it can start (and get the
+    # certificate) before the others are up, and `up backend caddy` works without the rest.
+
+volumes:
+  frontend_dist:
+  caddy_data:
+  caddy_config:

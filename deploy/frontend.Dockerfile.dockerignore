@@ -1,0 +1,8 @@
+# Applies to frontend.Dockerfile (BuildKit picks up <Dockerfile>.dockerignore), so frontend/
+# doesn't need its own .dockerignore.
+node_modules
+**/node_modules
+dist
+.env
+.env.*
+.git
