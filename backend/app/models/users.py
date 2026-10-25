@@ -44,6 +44,7 @@ class Profile(SQLModel, table=True):
 
     id: str = id_field("prf")
     user_id: str = fk("users.id", index=False)
+    overview: str | None = None  # AI blurb from questionnaire + socials + interview
     summary: str | None = None  # from the interview Summarizer
     traits: dict[str, Any] = json_field(dict)
     transcript: list[dict[str, Any]] = json_field(list)
