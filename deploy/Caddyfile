@@ -1,0 +1,50 @@
+# SquadUp production routing. One HTTPS origin (the mic and Secure cookies need it):
+#   /api/*        -> backend:8001 (path unchanged)
+#   /agents/ws/*  -> agents:8000 with /agents stripped (/agents/ws/interview -> /ws/interview)
+#   everything else -> the built SPA in /srv, falling back to /index.html
+# Nothing else on the agents service (/recommend, /internal/*, ...) is reachable from outside.
+# DOMAIN comes from deploy/.env via docker-compose. Caddy gets and renews the certificate itself.
+
+{$DOMAIN} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		# Mic for the voice interview; camera/mic also delegable to an embedded Jitsi call.
+		Permissions-Policy "microphone=(self \"https://meet.jit.si\"), camera=(self \"https://meet.jit.si\"), display-capture=(self \"https://meet.jit.si\"), geolocation=(), payment=()"
+		Content-Security-Policy "frame-ancestors 'none'; base-uri 'self'; object-src 'none'"
+		-Server
+	}
+
+	handle /api/* {
+		reverse_proxy backend:8001
+	}
+
+	# Interview WebSocket. reverse_proxy handles the Upgrade handshake on its own.
+	handle /agents/ws/* {
+		uri strip_prefix /agents
+		reverse_proxy agents:8000
+	}
+
+	# Any other /agents path stays private.
+	handle /agents* {
+		respond 404
+	}
+
+	handle {
+		root * /srv
+		# Hashed Vite assets can be cached forever; everything else (index.html) must revalidate.
+		@assets path /assets/*
+		header @assets Cache-Control "public, max-age=31536000, immutable"
+		@notAssets not path /assets/*
+		header @notAssets Cache-Control "no-cache"
+		try_files {path} /index.html
+		file_server
+	}
+
+	# Access log to stderr, so `docker compose logs caddy` shows it.
+	log
+}

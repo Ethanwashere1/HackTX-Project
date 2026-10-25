@@ -1,0 +1,32 @@
+# secrets / env
+.env
+.env.*
+!.env.example
+
+# python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.coverage
+
+# databases
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+
+# node / next
+node_modules/
+.next/
+
+# claude code (personal settings)
+.claude/settings.local.json
+
+# backend embedded dev Postgres (pgserver)
+backend/.pgdata/
+
+# claude code worktrees (parallel builders)
+.claude/worktrees/
