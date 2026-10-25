@@ -1,213 +1,229 @@
-import {
-  mockConnections,
-  mockEvents,
-  mockGroup,
-  mockMe,
-  mockOrgFeed,
-  mockProfile,
-  mockRecommendations,
-  mockRequests,
-  mockThread,
-} from "./mocks";
+import { ApiError } from "./errors";
+import { mockApi } from "./mocks";
 import type {
+  Connection,
+  Contact,
+  CreateEventBody,
+  CreateEventResult,
+  CreateOrgBody,
+  CreateRequestBody,
+  CreateRequestResult,
   EventDetail,
   GroupPage,
+  InterviewStart,
+  JoinDecision,
+  JoinEventBody,
+  JoinEventResult,
+  JoinOrgResult,
+  JoinRequest,
   Me,
+  Message,
+  Org,
   OrgFeed,
   Profile,
   RecommendationsResponse,
+  RequestBox,
+  RequestDecision,
   RequestItem,
-  Thread,
+  ThreadInfo,
 } from "./types";
 
-const useMocks =
-  import.meta.env.VITE_USE_MOCKS === "1" ||
-  import.meta.env.VITE_USE_MOCKS === undefined ||
-  import.meta.env.VITE_USE_MOCKS === "";
-
-type ApiError = { error: { code: string; message: string } };
+/** Mocks are opt-in: only `VITE_USE_MOCKS=1` uses them. */
+const useMocks = import.meta.env.VITE_USE_MOCKS === "1";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     credentials: "include",
-    headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
     ...init,
+    headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
   });
-  if (!res.ok) {
-    let body: ApiError | null = null;
-    try {
-      body = (await res.json()) as ApiError;
-    } catch {
-      /* ignore */
-    }
-    throw new Error(body?.error?.message ?? `Request failed (${res.status})`);
-  }
+  if (!res.ok) throw await ApiError.fromResponse(res);
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
 }
 
-let sessionAuthed = useMocks;
+const post = <T>(path: string, body?: unknown) =>
+  request<T>(path, { method: "POST", body: body === undefined ? undefined : JSON.stringify(body) });
 
-export const api = {
-  useMocks: () => useMocks,
+const q = encodeURIComponent;
 
+/** A WebSocket, or the mock stand-in, as the Interview page uses it. */
+export type InterviewSocket = {
+  onopen: ((ev: Event) => void) | null;
+  onmessage: ((ev: MessageEvent) => void) | null;
+  onerror: ((ev: Event) => void) | null;
+  onclose: ((ev: CloseEvent) => void) | null;
+  readonly readyState: number;
+  send(data: string): void;
+  close(): void;
+};
+
+/** `ws_url` may be absolute (`ws://localhost:8000/ws/interview`) or a path (`/agents/ws/interview`). */
+export function interviewSocketUrl(wsUrl: string, token: string, input: "voice" | "text"): string {
+  const url = new URL(wsUrl, window.location.href);
+  if (url.protocol === "http:") url.protocol = "ws:";
+  if (url.protocol === "https:") url.protocol = "wss:";
+  url.searchParams.set("token", token);
+  url.searchParams.set("input", input);
+  return url.toString();
+}
+
+export type SeedUser = { email: string; name: string };
+
+export const realApi = {
+  useMocks: () => false,
+
+  // --- auth / me ---
   async me(): Promise<Me | null> {
-    if (useMocks) return sessionAuthed ? mockMe : null;
     try {
       return await request<Me>("/api/me");
-    } catch {
-      return null;
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 401) return null;
+      throw e;
     }
   },
 
-  googleLoginUrl(next = "/orgs/org_ut"): string {
-    if (useMocks) return `/login?dev=1&next=${encodeURIComponent(next)}`;
-    return `/api/auth/google/login?next=${encodeURIComponent(next)}`;
+  googleLoginUrl(next = "/"): string {
+    return `/api/auth/google/login?next=${q(next)}`;
   },
 
-  async devLogin(): Promise<Me> {
-    if (useMocks) {
-      sessionAuthed = true;
-      return mockMe;
-    }
-    return request<Me>("/api/auth/dev-login", {
-      method: "POST",
-      body: JSON.stringify({ email: mockMe.email, name: mockMe.name }),
-    });
+  devLogin(user: SeedUser): Promise<Me> {
+    return post<Me>("/api/auth/dev-login", user);
   },
 
   async logout(): Promise<void> {
-    if (useMocks) {
-      sessionAuthed = false;
-      return;
-    }
-    await request<void>("/api/auth/logout", { method: "POST" });
+    await post<void>("/api/auth/logout");
   },
 
-  async orgFeed(orgId: string): Promise<OrgFeed> {
-    if (useMocks) return { ...mockOrgFeed, org_id: orgId };
-    return request<OrgFeed>(`/api/orgs/${orgId}/feed`);
+  getProfile(): Promise<Profile> {
+    return request<Profile>("/api/me/profile");
   },
 
-  async getEvent(eventId: string): Promise<EventDetail> {
-    if (useMocks) {
-      const evt = mockEvents[eventId] ?? mockEvents.evt_hacktx;
-      return structuredClone(evt);
-    }
-    return request<EventDetail>(`/api/events/${eventId}`);
-  },
-
-  async createEvent(body: Record<string, unknown>): Promise<{ event_id: string }> {
-    if (useMocks) {
-      return { event_id: "evt_hacktx" };
-    }
-    return request("/api/events", { method: "POST", body: JSON.stringify(body) });
-  },
-
-  async joinEvent(
-    eventId: string,
-    body: Record<string, unknown>,
-  ): Promise<{ event_id: string; profile_status: string; interview: { available: boolean } }> {
-    if (useMocks) {
-      const evt = mockEvents[eventId];
-      if (evt) evt.my_membership = { joined_at: new Date().toISOString(), group_id: null };
-      return {
-        event_id: eventId,
-        profile_status: "ready",
-        interview: { available: evt?.interview_enabled ?? false },
-      };
-    }
-    return request(`/api/events/${eventId}/join`, {
-      method: "POST",
-      body: JSON.stringify(body),
-    });
-  },
-
-  async recommendations(eventId: string): Promise<RecommendationsResponse> {
-    if (useMocks) {
-      if (eventId === "evt_study") {
-        return {
-          ranked_by: "agent",
-          results: mockConnections.map((c) => ({
-            candidate_type: "user" as const,
-            id: c.user_id,
-            name: c.name,
-            score: 0.8,
-            reason: c.reason,
-            tags: c.tags,
-          })),
-        };
-      }
-      return mockRecommendations;
-    }
-    return request(`/api/events/${eventId}/recommendations`);
-  },
-
-  async createRequest(body: {
-    target_type: "user" | "group";
-    target_id: string;
-    event_id: string;
-  }): Promise<{ request_id: string; thread_id: string }> {
-    if (useMocks) return { request_id: "req_2", thread_id: "thr_1" };
-    return request("/api/requests", { method: "POST", body: JSON.stringify(body) });
-  },
-
-  async listRequests(): Promise<RequestItem[]> {
-    if (useMocks) return mockRequests;
-    const res = await request<{ requests: RequestItem[] }>("/api/requests");
-    return res.requests;
-  },
-
-  async respondRequest(
-    requestId: string,
-    action: "accept" | "decline",
-  ): Promise<{ group_id?: string }> {
-    if (useMocks) return action === "accept" ? { group_id: "grp_pixel" } : {};
-    return request(`/api/requests/${requestId}/${action}`, { method: "POST" });
-  },
-
-  async getThread(threadId: string): Promise<Thread> {
-    if (useMocks) return { ...mockThread, thread_id: threadId };
-    return request(`/api/threads/${threadId}`);
-  },
-
-  async sendMessage(threadId: string, text: string): Promise<void> {
-    if (useMocks) {
-      mockThread.messages.push({
-        message_id: `msg_${mockThread.messages.length + 1}`,
-        sender_id: mockMe.user_id,
-        sender_name: mockMe.name,
-        text,
-        created_at: new Date().toISOString(),
-      });
-      return;
-    }
-    await request(`/api/threads/${threadId}/messages`, {
-      method: "POST",
-      body: JSON.stringify({ text }),
-    });
-  },
-
-  async getGroup(groupId: string): Promise<GroupPage> {
-    if (useMocks) return { ...mockGroup, group_id: groupId };
-    return request(`/api/groups/${groupId}`);
-  },
-
-  async getProfile(): Promise<Profile> {
-    if (useMocks) return mockProfile;
-    return request("/api/me/profile");
-  },
-
-  async saveContacts(contacts: Me["contacts"]): Promise<Me["contacts"]> {
-    if (useMocks) {
-      mockMe.contacts = contacts;
-      mockProfile.contacts = contacts;
-      return contacts;
-    }
-    const res = await request<{ contacts: Me["contacts"] }>("/api/me/contacts", {
+  async saveContacts(contacts: Contact[]): Promise<Contact[]> {
+    const res = await request<{ contacts: Contact[] }>("/api/me/contacts", {
       method: "PUT",
       body: JSON.stringify({ contacts }),
     });
     return res.contacts;
   },
+
+  // --- orgs ---
+  async listOrgs(): Promise<Org[]> {
+    return (await request<{ orgs: Org[] }>("/api/orgs")).orgs;
+  },
+
+  /** 404 for an unknown org, or a hidden one the user has no membership row in. */
+  getOrg(orgId: string): Promise<Org> {
+    return request<Org>(`/api/orgs/${q(orgId)}`);
+  },
+
+  createOrg(body: CreateOrgBody): Promise<{ org_id: string; verification: string }> {
+    return post("/api/orgs", body);
+  },
+
+  joinOrg(orgId: string, message?: string): Promise<JoinOrgResult> {
+    return post(`/api/orgs/${q(orgId)}/join`, message ? { message } : {});
+  },
+
+  orgFeed(orgId: string): Promise<OrgFeed> {
+    return request<OrgFeed>(`/api/orgs/${q(orgId)}/feed`);
+  },
+
+  async joinRequests(orgId: string): Promise<JoinRequest[]> {
+    const res = await request<{ requests: JoinRequest[] }>(
+      `/api/orgs/${q(orgId)}/join-requests?status=pending`,
+    );
+    return res.requests;
+  },
+
+  decideJoinRequest(
+    orgId: string,
+    userId: string,
+    action: "approve" | "decline",
+  ): Promise<JoinDecision> {
+    return post(`/api/orgs/${q(orgId)}/join-requests/${q(userId)}/${action}`);
+  },
+
+  // --- events ---
+  getEvent(eventId: string): Promise<EventDetail> {
+    return request<EventDetail>(`/api/events/${q(eventId)}`);
+  },
+
+  createEvent(body: CreateEventBody): Promise<CreateEventResult> {
+    return post("/api/events", body);
+  },
+
+  joinEvent(eventId: string, body: JoinEventBody): Promise<JoinEventResult> {
+    return post(`/api/events/${q(eventId)}/join`, body);
+  },
+
+  startInterview(eventId: string): Promise<InterviewStart> {
+    return post(`/api/events/${q(eventId)}/interview`);
+  },
+
+  openInterviewSocket(start: InterviewStart, input: "voice" | "text"): InterviewSocket {
+    return new WebSocket(interviewSocketUrl(start.ws_url, start.interview_token, input));
+  },
+
+  recommendations(eventId: string, limit = 10): Promise<RecommendationsResponse> {
+    return request(`/api/events/${q(eventId)}/recommendations?limit=${limit}`);
+  },
+
+  async connections(eventId: string): Promise<Connection[]> {
+    return (await request<{ connections: Connection[] }>(`/api/events/${q(eventId)}/connections`))
+      .connections;
+  },
+
+  // --- requests ---
+  createRequest(body: CreateRequestBody): Promise<CreateRequestResult> {
+    return post("/api/requests", body);
+  },
+
+  async listRequests(box: RequestBox, eventId?: string): Promise<RequestItem[]> {
+    const params = new URLSearchParams({ box });
+    if (eventId) params.set("event_id", eventId);
+    return (await request<{ requests: RequestItem[] }>(`/api/requests?${params}`)).requests;
+  },
+
+  respondRequest(
+    requestId: string,
+    action: "accept" | "decline" | "cancel",
+  ): Promise<RequestDecision> {
+    return post(`/api/requests/${q(requestId)}/${action}`);
+  },
+
+  // --- threads ---
+  getThread(threadId: string): Promise<ThreadInfo> {
+    return request<ThreadInfo>(`/api/threads/${q(threadId)}`);
+  },
+
+  async listMessages(threadId: string, after?: string): Promise<Message[]> {
+    const qs = after ? `?after=${q(after)}` : "";
+    return (await request<{ messages: Message[] }>(`/api/threads/${q(threadId)}/messages${qs}`))
+      .messages;
+  },
+
+  sendMessage(threadId: string, text: string): Promise<Message> {
+    return post(`/api/threads/${q(threadId)}/messages`, { text });
+  },
+
+  async callUrl(threadId: string): Promise<string> {
+    return (await post<{ call_url: string }>(`/api/threads/${q(threadId)}/call`)).call_url;
+  },
+
+  // --- groups ---
+  getGroup(groupId: string): Promise<GroupPage> {
+    return request<GroupPage>(`/api/groups/${q(groupId)}`);
+  },
 };
+
+export type Api = typeof realApi;
+
+export const api: Api = useMocks ? mockApi : realApi;
+
+/** Seed users from `backend/app/seed.py`, for the dev-only login picker. */
+export const SEED_USERS: SeedUser[] = [
+  { email: "priya@seed.squadup.dev", name: "Priya Sharma" },
+  { email: "ana@seed.squadup.dev", name: "Ana Ruiz" },
+  { email: "morgan@seed.squadup.dev", name: "Morgan Reyes" },
+];

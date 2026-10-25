@@ -1,12 +1,27 @@
 import { useState, type FormEvent } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
-import type { EventType, QuestionKind, Tone } from "../api/types";
+import { errorMessage } from "../api/errors";
+import type { CreateEventBody, EventType, QuestionKind, Tone } from "../api/types";
+import { useAuth } from "../auth/AuthContext";
 
 type DraftQ = { text: string; kind: QuestionKind; options: string; required: boolean };
 
+/** "Experience level, skills" -> ["experience_level", "skills"] (contract: ^[a-z][a-z0-9_]{0,49}$). */
+function fieldKeys(raw: string): string[] {
+  const keys = raw
+    .split(",")
+    .map((s) => s.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, ""))
+    .filter((k) => /^[a-z][a-z0-9_]{0,49}$/.test(k));
+  return [...new Set(keys)];
+}
+
 export function CreateEventPage() {
   const navigate = useNavigate();
+  const { me } = useAuth();
+  const [params] = useSearchParams();
+  const myOrgs = me?.orgs ?? [];
+  const [orgId, setOrgId] = useState<string>(params.get("org") ?? myOrgs[0]?.org_id ?? "");
   const [name, setName] = useState("HackTX team-up");
   const [description, setDescription] = useState("Find your hackathon team");
   const [type, setType] = useState<EventType>("structured");
@@ -14,6 +29,9 @@ export function CreateEventPage() {
   const [groupCount, setGroupCount] = useState(6);
   const [minSize, setMinSize] = useState(3);
   const [maxSize, setMaxSize] = useState(4);
+  const [maxGroupsPerUser, setMaxGroupsPerUser] = useState(1);
+  const [requiredFields, setRequiredFields] = useState("skills, experience_level");
+  const [startsAt, setStartsAt] = useState("");
   const [interview, setInterview] = useState(true);
   const [questions, setQuestions] = useState<DraftQ[]>([
     {
@@ -38,33 +56,39 @@ export function CreateEventPage() {
     setBusy(true);
     setError(null);
     try {
-      const body: Record<string, unknown> = {
-        org_id: "org_ut",
+      const body: CreateEventBody = {
         name,
         description,
         type,
         tone,
         interview_enabled: interview,
-        required_fields: type === "structured" ? ["skills", "experience_level"] : ["subjects"],
-        questions: questions.map((q) => ({
-          text: q.text,
-          kind: q.kind,
-          required: q.required,
-          options:
-            q.kind === "single_choice" || q.kind === "multi_choice"
-              ? q.options.split(",").map((s) => s.trim()).filter(Boolean)
-              : null,
-        })),
+        required_fields: fieldKeys(requiredFields),
+        questions: questions
+          .filter((q) => q.text.trim())
+          .map((q) => ({
+            text: q.text.trim(),
+            kind: q.kind,
+            required: q.required,
+            options:
+              q.kind === "single_choice" || q.kind === "multi_choice"
+                ? [...new Set(q.options.split(",").map((s) => s.trim()).filter(Boolean))]
+                : null,
+          })),
       };
+      // Without an org the event is unlisted and reachable by link only.
+      if (orgId) body.org_id = orgId;
+      if (startsAt) body.starts_at = new Date(startsAt).toISOString();
+      // Informal events must omit the group settings (422 otherwise).
       if (type === "structured") {
         body.group_count = groupCount;
         body.min_size = minSize;
         body.max_size = maxSize;
+        body.max_groups_per_user = maxGroupsPerUser;
       }
       const res = await api.createEvent(body);
       navigate(`/events/${res.event_id}`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create event");
+      setError(errorMessage(err, "Failed to create event"));
     } finally {
       setBusy(false);
     }
@@ -76,6 +100,19 @@ export function CreateEventPage() {
       <p className="su-page-sub">Host a structured team-up or an informal 1:1 connection event.</p>
 
       <form className="su-card" style={{ padding: "1.25rem", maxWidth: 720 }} onSubmit={(e) => void onSubmit(e)}>
+        <div className="su-field">
+          <label className="su-label" htmlFor="org">
+            Organization
+          </label>
+          <select id="org" className="su-select" value={orgId} onChange={(e) => setOrgId(e.target.value)}>
+            {myOrgs.map((o) => (
+              <option key={o.org_id} value={o.org_id}>
+                {o.name} (members only)
+              </option>
+            ))}
+            <option value="">No organization (unlisted, anyone with the link)</option>
+          </select>
+        </div>
         <div className="su-field">
           <label className="su-label" htmlFor="name">
             Event name
@@ -127,6 +164,16 @@ export function CreateEventPage() {
         {type === "structured" ? (
           <div className="su-grid-2">
             <div className="su-field">
+              <label className="su-label">Max groups per person</label>
+              <input
+                className="su-input"
+                type="number"
+                min={1}
+                value={maxGroupsPerUser}
+                onChange={(e) => setMaxGroupsPerUser(Number(e.target.value))}
+              />
+            </div>
+            <div className="su-field">
               <label className="su-label">Group count</label>
               <input
                 className="su-input"
@@ -157,6 +204,33 @@ export function CreateEventPage() {
             </div>
           </div>
         ) : null}
+
+        <div className="su-grid-2">
+          <div className="su-field">
+            <label className="su-label" htmlFor="fields">
+              Profile fields everyone fills in (comma-separated)
+            </label>
+            <input
+              id="fields"
+              className="su-input"
+              value={requiredFields}
+              placeholder="skills, experience_level"
+              onChange={(e) => setRequiredFields(e.target.value)}
+            />
+          </div>
+          <div className="su-field">
+            <label className="su-label" htmlFor="starts">
+              Starts at (optional)
+            </label>
+            <input
+              id="starts"
+              className="su-input"
+              type="datetime-local"
+              value={startsAt}
+              onChange={(e) => setStartsAt(e.target.value)}
+            />
+          </div>
+        </div>
 
         <label className="su-label" style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
           <input type="checkbox" checked={interview} onChange={(e) => setInterview(e.target.checked)} />
@@ -210,6 +284,18 @@ export function CreateEventPage() {
                 />
               </div>
             </div>
+            <label className="su-label" style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+              <input
+                type="checkbox"
+                checked={q.required}
+                onChange={(e) => {
+                  const next = [...questions];
+                  next[i] = { ...q, required: e.target.checked };
+                  setQuestions(next);
+                }}
+              />
+              Required
+            </label>
           </div>
         ))}
 
