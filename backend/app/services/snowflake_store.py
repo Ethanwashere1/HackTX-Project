@@ -174,6 +174,19 @@ def upsert_embeddings(rows: list[EmbeddingRow]) -> None:
     log.info("Synced %d embedding(s) to Snowflake", len(rows))
 
 
+def delete_events(event_ids: list[str]) -> None:
+    """Remove every vector of these events (used by the seed reset when events are deleted)."""
+    if not event_ids:
+        return
+
+    def work(cur: Any) -> None:
+        table = _ensure_table(cur)
+        for event_id in event_ids:
+            cur.execute(f"DELETE FROM {table} WHERE EVENT_ID = %(event_id)s", {"event_id": event_id})
+
+    _run(work)
+
+
 def similarities(event_id: str, vector: list[float], exclude_user_id: str, limit: int) -> dict[str, float]:
     """{user_id: cosine similarity to `vector`} for the event's synced members, best first."""
 
