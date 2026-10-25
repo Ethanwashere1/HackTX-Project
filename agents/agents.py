@@ -1,8 +1,10 @@
 import json
+import logging
 import os
 from pathlib import Path
 from dotenv import load_dotenv
 from google import genai
+from google.genai import errors as genai_errors
 from google.genai import types
 from pydantic import BaseModel, Field
 
@@ -46,9 +48,31 @@ def get_client() -> genai.Client:
 
 
 MODEL_ID = env_value("GEMINI_MODEL", "gemini-3.8-flash")
+# Tried in order when a model is overloaded, rate limited or times out (comma-separated).
+FALLBACK_MODEL_IDS = [
+    m.strip()
+    for m in (env_value("GEMINI_FALLBACK_MODELS", "gemini-3.5-flash,gemini-3-flash-preview,gemini-flash-lite-latest") or "").split(",")
+    if m.strip()
+]
 # Audio-native Live model served on the Gemini API (API key); see google-genai's live tests.
 LIVE_MODEL_ID = env_value("GEMINI_LIVE_MODEL", "gemini-3.1-flash-live-preview")
 FAST_THINKING = types.ThinkingConfig(thinking_budget=0)
+# Statuses where another model is likely to answer: overloaded, rate limited, internal error, timeout.
+FALLBACK_STATUSES = {429, 500, 503, 504}
+
+log = logging.getLogger("squadup.agents")
+
+
+def generate(contents, config: types.GenerateContentConfig):
+    """generate_content on MODEL_ID, moving to the next fallback model while Gemini is overloaded."""
+    models = [MODEL_ID, *(m for m in FALLBACK_MODEL_IDS if m != MODEL_ID)]
+    for i, model in enumerate(models):
+        try:
+            return get_client().models.generate_content(model=model, contents=contents, config=config)
+        except genai_errors.APIError as e:
+            if e.code not in FALLBACK_STATUSES or i == len(models) - 1:
+                raise
+            log.warning("Gemini %s returned %s; trying %s", model, e.code, models[i + 1])
 
 
 # =========================================================
@@ -104,8 +128,7 @@ def build_interviewer_instruction(event_config: dict | None, voice: bool = False
 def run_gemini_interviewer(conversation_history: list[dict], event_config: dict | None = None) -> dict:
     """Conducts the interview conversation turn-by-turn."""
     transcript = "\n".join([f"{msg.get('role', 'user').upper()}: {msg.get('text', '')}" for msg in conversation_history])
-    response = get_client().models.generate_content(
-        model=MODEL_ID,
+    response = generate(
         contents=f"Conversation so far:\n{transcript}",
         config=types.GenerateContentConfig(
             system_instruction=build_interviewer_instruction(event_config),
@@ -130,8 +153,7 @@ def run_gemini_profiler(transcript: str) -> dict:
     """Turns an interview transcript into a structured profile summary and traits."""
     prompt = f"Analyze this candidate interview transcript and extract a professional summary and key traits:\n\n{transcript}"
 
-    response = get_client().models.generate_content(
-        model=MODEL_ID,
+    response = generate(
         contents=prompt,
         config=types.GenerateContentConfig(
             system_instruction=(
@@ -179,8 +201,7 @@ def run_gemini_matchmaker(viewer_profile: dict, candidates: list[dict], event_co
     """
 
     try:
-        response = get_client().models.generate_content(
-            model=MODEL_ID,
+        response = generate(
             contents=prompt,
             config=types.GenerateContentConfig(
                 system_instruction=(
