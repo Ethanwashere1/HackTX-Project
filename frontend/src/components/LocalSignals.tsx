@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
-import type { EnrichmentContext } from "../demo";
+import type { EnrichmentContext } from "../api/types";
 import "./LocalSignals.css";
 
 function readGeo(): Promise<{ lat: number; lng: number } | null> {

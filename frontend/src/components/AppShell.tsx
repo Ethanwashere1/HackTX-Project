@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { Avatar } from "./Avatar";
@@ -48,8 +48,8 @@ export function AppShell() {
   const orgs = me?.orgs ?? [];
   const primary = orgs[0] ?? null;
   const home = primary ? `/orgs/${primary.org_id}` : "/orgs";
-  // No "my events", "my teams" or "messages" list exists in the API yet, so the nav links to the
-  // org feed (with a joined filter) and the requests inbox, which links to chats and teams.
+  // No "my events", "my squads" or "messages" list exists in the API yet, so the nav links to the
+  // org feed (with a joined filter) and the requests inbox, which links to chats and squads.
   const nav = [
     { to: home, label: "Discover", short: "Home", end: true },
     ...(primary ? [{ to: `${home}?joined=1`, label: "My events", short: "Events", end: true }] : []),
@@ -90,11 +90,8 @@ export function AppShell() {
           </button>
         </div>
 
-        <button
-          type="button"
-          className="shell-org"
-          onClick={() => navigate(home)}
-        >
+        {/* Context chip only — not a second "active" nav twin of Discover */}
+        <div className="shell-org" aria-label="Current organization">
           <span className="shell-org-mono">{primary ? orgMono(primary.name) : "+"}</span>
           <span className="shell-org-copy">
             <strong>{primary?.name ?? "Find an organization"}</strong>
@@ -120,12 +117,24 @@ export function AppShell() {
 
         <div className="shell-spaces">
           <p>Your spaces</p>
+          {/* Plain Link — avoids a second aria-current / active twin of Discover */}
           {orgs.map((o) => (
-            <NavLink key={o.org_id} to={`/orgs/${o.org_id}`}>
+            <Link
+              key={o.org_id}
+              to={`/orgs/${o.org_id}`}
+              className={`shell-space-link${
+                onOrgFeed && location.pathname === `/orgs/${o.org_id}` ? " is-current-space" : ""
+              }`}
+            >
               {o.name}
-            </NavLink>
+            </Link>
           ))}
-          <NavLink to="/orgs/new">+ Create organization</NavLink>
+          <NavLink
+            to="/orgs/new"
+            className={({ isActive }) => `shell-space-link${isActive ? " is-current-space" : ""}`}
+          >
+            + Create organization
+          </NavLink>
         </div>
 
         <div className="shell-foot">

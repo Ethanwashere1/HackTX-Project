@@ -16,7 +16,7 @@ const STATUS_BADGE: Record<RequestItem["status"], string> = {
 };
 
 function outcomeLink(item: { event_id: string; group_id: string | null; connection_id: string | null }) {
-  if (item.group_id) return { to: `/groups/${item.group_id}`, label: "Open team" };
+  if (item.group_id) return { to: `/groups/${item.group_id}`, label: "Open squad" };
   if (item.connection_id) return { to: `/events/${item.event_id}/recommendations`, label: "See connection" };
   return null;
 }

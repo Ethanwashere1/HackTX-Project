@@ -53,6 +53,21 @@ export function ProfilePage() {
       <p className="su-page-sub">{profile.email} · contact methods stay private until mutual accept</p>
 
       <article className="su-card" style={{ padding: "1.15rem", marginBottom: "1rem", maxWidth: 720 }}>
+        <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
+          <h3 style={{ margin: 0 }}>AI overview</h3>
+          <span className="su-badge su-badge-soft">What matches and squadmates see</span>
+        </div>
+        {profile.overview ? (
+          <p style={{ lineHeight: 1.55 }}>{profile.overview}</p>
+        ) : (
+          <p style={{ color: "var(--su-text-muted)" }}>
+            No overview yet. Join an event and answer its questions (or take the voice intro) and
+            SquadUp will write one from your answers.
+          </p>
+        )}
+      </article>
+
+      <article className="su-card" style={{ padding: "1.15rem", marginBottom: "1rem", maxWidth: 720 }}>
         <h3>Interview summary</h3>
         {profile.interviewed && profile.summary ? (
           <>

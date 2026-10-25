@@ -18,10 +18,14 @@ picker for the seed users (Priya Sharma, Ana Ruiz, Morgan Reyes).
 To run without a backend, set `VITE_USE_MOCKS=1` (only the exact value `1` enables the in-browser mocks
 in `src/api/mocks.ts`).
 
-Demo path: dev login → UT Austin feed → HackTX event → join → interview → recommendations → request/chat → team page.
+Demo path: dev login → UT Austin feed → HackTX event → join → interview → recommendations → request/chat → squad page.
 
 ## API
 
 - Proxies `/api` → `http://localhost:8001`
 - The interview connects to the `ws_url` returned by `POST /api/events/{id}/interview` (contract section 9).
 - `src/api/types.ts` mirrors `docs/CONTRACT.md`; errors are thrown as `ApiError` with the contract's `error.code`.
+- AI assists: `POST /api/question-suggestions` drafts questionnaire questions on Create event, and
+  `GET /api/me/profile` returns the AI `overview` shown on the profile page.
+- Campus signals on the org feed call `GET /api/enrichment/context` (SerpAPI Maps, Events/calendar and social
+  lookup, plus browser geolocation). The backend serves demo fallbacks when `SERPAPI_API_KEY` is unset.

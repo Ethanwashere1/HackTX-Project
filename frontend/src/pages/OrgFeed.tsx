@@ -8,11 +8,12 @@ import type { Org, OrgFeed, OrgFeedEvent } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
 import { JoinOrgButton } from "../components/JoinOrg";
 import { JoinRequestsPanel } from "../components/JoinRequests";
+import { LocalSignals } from "../components/LocalSignals";
 import "./OrgFeed.css";
 
 function eventTag(evt: OrgFeedEvent) {
   return evt.type === "structured"
-    ? { label: "TEAM EVENT", cls: "su-badge-warm" }
+    ? { label: "SQUAD EVENT", cls: "su-badge-warm" }
     : { label: "1:1 CONNECTION", cls: "su-badge-teal" };
 }
 
@@ -179,7 +180,7 @@ export function OrgFeedPage() {
                   {evt.joined
                     ? "Open event →"
                     : evt.type === "structured"
-                      ? "Explore & find teammates →"
+                      ? "Explore & find your squad →"
                       : "Open event →"}
                 </Link>
               </article>

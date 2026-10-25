@@ -9,7 +9,7 @@ const POLL_MS = 2000;
 
 const KIND_COPY: Record<ThreadInfo["kind"], string> = {
   request: "Pre-join chat",
-  group: "Team chat",
+  group: "Squad chat",
   connection: "Connection chat",
 };
 
@@ -100,7 +100,7 @@ function ThreadView({ threadId }: { threadId: string }) {
             {KIND_COPY[thread.kind]}
             {others.length ? ` · with ${others.join(", ")}` : ""} ·{" "}
             {thread.group_id && thread.kind === "group" ? (
-              <Link to={`/groups/${thread.group_id}`}>Team page</Link>
+              <Link to={`/groups/${thread.group_id}`}>Squad page</Link>
             ) : (
               <Link to={`/events/${thread.event_id}`}>Event</Link>
             )}

@@ -2,11 +2,11 @@ import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import App from "../App";
-import { api } from "../api/client";
+import { api, SEED_USERS } from "../api/client";
 
 describe("CreateEventPage questionnaire count", () => {
   beforeEach(async () => {
-    await api.devLogin();
+    await api.devLogin(SEED_USERS[0]);
     window.history.pushState({}, "", "/events/new");
   });
 
@@ -27,5 +27,15 @@ describe("CreateEventPage questionnaire count", () => {
     await user.click(screen.getByRole("button", { name: /remove last/i }));
     expect(screen.queryByText("Question 5")).not.toBeInTheDocument();
     expect(screen.getByText("Question 4")).toBeInTheDocument();
+  });
+
+  it("appends AI-suggested questions that stay editable", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    expect(await screen.findByRole("heading", { name: /create event/i })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /suggest questions/i }));
+    expect(await screen.findByText("Question 6")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("What role would you take on a squad?")).toBeInTheDocument();
+    expect(screen.getByLabelText(/number of questions/i)).toHaveValue(6);
   });
 });
