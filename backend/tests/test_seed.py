@@ -102,11 +102,12 @@ def test_structured_recommendations_for_a_solo_seed_user(seeded, login_as):
     u, g = seeded.users, seeded.groups
     assert body["ranked_by"] == "similarity"
     people = people_ids(body)
-    assert len(people) == 10 and uid(priya) not in people  # limit 10 of the 14 others
+    # Only the people not yet in a group: everyone grouped is at max_groups_per_user (1), so the
+    # other ML people (Dev, Eli) are reachable only through Team Neural.
+    assert set(people) == {u[n] for n in ("jordan", "kai", "liam", "mia", "noah")}
     scores = [p["score"] for p in body["people"]]
     assert scores == sorted(scores, reverse=True) and scores[0] > 0
-    # The other ML people rank first, and the ML team leads the open groups; the full team is out.
-    assert set(people[:2]) == {u["dev"], u["eli"]}
+    # The ML team leads the open groups; the full team is out.
     assert group_ids(body) == [g["Team Neural"], g["Team Pixel"]]
 
 

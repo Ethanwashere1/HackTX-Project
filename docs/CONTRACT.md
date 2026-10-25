@@ -149,9 +149,12 @@ Endpoints:
   - In similarity mode, `score` is the cosine similarity rounded to 4 decimal places; a group member without a vector counts as 0.0.
   - `groups` is always `[]` for informal events.
   - `limit` is 1–50. Each candidate type (`people`, `groups`) returns at most `limit` entries. The `limit` sent to the agents' `/recommend` is `limit` × the number of candidate types present, capped at 50.
-- **Excluded from results:** the viewer, people already in the viewer's groups, groups the viewer is in, full groups, users or groups the viewer declined or was declined by, and users or groups with a pending request to or from the viewer (or the viewer's groups). When the viewer has reached `max_groups_per_user`, `groups` is `[]`.
-- **Not excluded yet (open question):** people who have hit `max_groups_per_user`, and everyone once the event has `group_count` groups, are still recommended; accepting then fails with 409. See PLAN.md Open Questions.
-- The Socials line (handles) is stripped from each candidate's `profile_text` before it is sent to the agents.
+- **Excluded from results:** the viewer, people already in the viewer's groups, groups the viewer is in, full groups, users or groups the viewer declined or was declined by, and users or groups with a pending request to or from the viewer (or the viewer's groups).
+- **Structured events only recommend what an accept could settle:**
+  - People who already have `max_groups_per_user` groups are excluded; they stay reachable through their group while it's open.
+  - `people` is `[]` once the event has `group_count` groups, or when `max_size` is below 2.
+  - When the viewer has reached `max_groups_per_user`, both `people` and `groups` are `[]`, since either accept would fail with `group_limit_per_user`.
+- The Socials line (handles) and the Public info line (SerpAPI notes) are stripped from each candidate's `profile_text`, including group members' texts, before it is sent to the agents.
 
 ## 5. Requests and consent
 **`POST /api/requests`**

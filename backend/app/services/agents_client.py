@@ -10,9 +10,17 @@ from app.config import get_settings
 
 log = logging.getLogger(__name__)
 
+MAX_REASON_CHARS = 300  # a reason is a sentence or two on a card; longer output is cut
+
 
 def _post(url: str, **kwargs) -> httpx.Response:
     return httpx.post(url, **kwargs)
+
+
+def _clip(text: str) -> str:
+    if len(text) <= MAX_REASON_CHARS:
+        return text
+    return text[:MAX_REASON_CHARS - 1].rstrip() + "…"
 
 
 def rerank(
@@ -20,9 +28,9 @@ def rerank(
 ) -> list[dict[str, Any]] | None:
     """The agent's reranked picks: [{candidate_type, id, score, reason}], best first.
 
-    Keeps only results whose (candidate_type, id) was among `candidates`, once each. Returns None
-    when the agents service is not configured, fails, times out or returns nothing usable; the
-    caller then falls back to the similarity order.
+    Keeps only results whose (candidate_type, id) was among `candidates`, once each, with each
+    reason cut to MAX_REASON_CHARS. Returns None when the agents service is not configured,
+    fails, times out or returns nothing usable; the caller then falls back to the similarity order.
     """
     settings = get_settings()
     if not candidates:
@@ -67,7 +75,7 @@ def rerank(
         if isinstance(score, bool) or not isinstance(score, (int, float)) or not math.isfinite(score):
             score = None
         reason = item.get("reason")
-        reason = reason.strip() or None if isinstance(reason, str) else None
+        reason = _clip(reason.strip()) or None if isinstance(reason, str) else None
         picked.append({"candidate_type": key[0], "id": key[1], "score": score, "reason": reason})
     if not picked:
         log.warning("Agents /recommend returned no known candidates")

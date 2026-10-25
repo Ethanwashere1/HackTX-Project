@@ -1,16 +1,18 @@
 """Contract section 4: GET /api/events/{id}/recommendations, its exclusions and every fallback
 (Snowflake -> pgvector, agents rerank -> similarity order). Gemini, Snowflake and agents are mocked."""
 
+import json
 import math
 
 import httpx
 import pytest
+from sqlalchemy import event
 from sqlmodel import Session, select, update
 
 from app import db as dbmod
 from app.config import EMBEDDING_DIM, get_settings
 from app.models import EventMember, OrgMember, Profile
-from app.services import agents_client, snowflake_store
+from app.services import agents_client, embeddings, profiles, snowflake_store
 from tests.test_embeddings import FakeGemini, FakeSnowflake, gemini_on, snowflake_on
 from tests.test_events import make_org
 from tests.test_health_errors import assert_error
@@ -61,6 +63,11 @@ def people_ids(body) -> list[str]:
 
 def group_ids(body) -> list[str]:
     return [g["group_id"] for g in body["groups"]]
+
+
+def by_id(users: dict, user_id: str):
+    """The signed-in client for this user id."""
+    return next(c for c in users.values() if uid(c) == user_id)
 
 
 class FakeAgents:
@@ -193,8 +200,8 @@ def test_open_groups_are_scored_by_member_similarity(ranked):
         "score": expected, "reason": None,
     }
     assert group["name"].startswith("Team ")
-    # Members of other groups are still recommended as people (contract section 4).
-    assert set(people_ids(body)) == {uid(u[n]) for n in ("ben", "cara", "dan", "eve")}
+    # Cara and Dan are at max_groups_per_user (1): reachable through their group, not as people.
+    assert people_ids(body) == [uid(u["ben"]), uid(u["eve"])]
 
 
 # --- exclusions ----------------------------------------------------------------------------------
@@ -235,13 +242,48 @@ def test_requests_to_viewers_group_and_declined_groups_are_excluded(login_as):
     assert body["groups"] == []  # g1 is ana's, g2 declined her
 
 
-def test_no_groups_once_viewer_reached_max_groups_per_user(ranked):
+def test_nothing_once_viewer_reached_max_groups_per_user(ranked, agents):
     event_id, u, _ = ranked
     form_group(u["ana"], u["ben"], event_id)  # max_groups_per_user is 1
     form_group(u["cara"], u["dan"], event_id)
+    # Joining a group or forming a new one would both be group_limit_per_user for ana.
+    assert recs(u["ana"], event_id) == {"ranked_by": "similarity", "people": [], "groups": []}
+    assert agents.calls == []
+
+
+def test_people_at_their_group_limit_are_excluded(login_as):
+    names = ["ana", "ben", "cara", "dan", "eve", "fay"]
+    event_id, u = setup_event(login_as, names, max_size=3, group_count=10, max_groups_per_user=2)
+    form_group(u["ben"], u["cara"], event_id)
+    form_group(u["ben"], u["dan"], event_id)  # ben: 2 of 2 groups; cara and dan: 1 of 2
+    eve_fay = form_group(u["eve"], u["fay"], event_id)
+    form_group(u["eve"], u["ana"], event_id)  # eve: 2 of 2; ana: 1 of 2, so she still gets recs
     body = recs(u["ana"], event_id)
-    assert body["groups"] == []
-    assert people_ids(body) == [uid(u[n]) for n in ("cara", "dan", "eve")]
+    assert set(people_ids(body)) == {uid(u[n]) for n in ("cara", "dan", "fay")}  # not ben (or eve)
+    assert len(body["groups"]) == 3 and eve_fay in group_ids(body)  # ben's two groups are open
+
+    # A recommended person can actually be requested and accepted.
+    top = body["people"][0]["user_id"]
+    accept_ok(by_id(u, top), send_ok(u["ana"], event_id, top)["request_id"])
+
+
+def test_no_people_once_the_event_has_group_count_groups(login_as):
+    event_id, u = setup_event(login_as, ["ana", "ben", "cara", "dan", "eve"], group_count=2)
+    form_group(u["ben"], u["cara"], event_id)
+    form_group(u["dan"], u["eve"], event_id)
+    body = recs(u["ana"], event_id)
+    # A user -> user accept would be group_limit_reached; the open groups can still take her.
+    assert body["people"] == [] and len(body["groups"]) == 2
+    req = send_ok(u["ana"], event_id, uid(u["ben"]))
+    assert_error(u["ben"].post(f"/api/requests/{req['request_id']}/accept"), 409, "group_limit_reached")
+    group = body["groups"][0]
+    req = send_ok(u["ana"], event_id, group["group_id"], "group")
+    accept_ok(by_id(u, group["members"][0]["user_id"]), req["request_id"])
+
+
+def test_no_people_when_groups_cant_hold_two(login_as):
+    event_id, u = setup_event(login_as, ["ana", "ben"], min_size=1, max_size=1)
+    assert recs(u["ana"], event_id)["people"] == []
 
 
 def test_informal_event_has_no_groups_and_excludes_connections(login_as):
@@ -271,15 +313,27 @@ def test_snowflake_similarity_is_used_when_configured(ranked, monkeypatch):
     monkeypatch.setattr(snowflake_store, "similarities", fake_similarities)
     body = recs(u["ana"], event_id)
     assert calls == [(event_id, v["ana"], uid(u["ana"]))]
-    assert people_ids(body) == [uid(u[n]) for n in ("dan", "cara", "ben", "eve")]
-    assert [p["score"] for p in body["people"]] == [0.95, 0.5, 0.0, 0.0]
+    # Ben isn't in Snowflake yet but has a vector: pgvector fills his score in.
+    assert people_ids(body) == [uid(u[n]) for n in ("ben", "dan", "cara", "eve")]
+    assert [p["score"] for p in body["people"]] == [round(cos(v["ana"], v["ben"]), 4), 0.95, 0.5, 0.0]
+
+
+def test_snowflake_answer_without_members_is_filled_from_pgvector(ranked, monkeypatch):
+    event_id, u, v = ranked
+    snowflake_on(monkeypatch)
+    monkeypatch.setattr(snowflake_store, "similarities", lambda *a: {})  # nothing synced yet
+    body = recs(u["ana"], event_id)
+    assert people_ids(body) == [uid(u[n]) for n in ("ben", "cara", "dan", "eve")]  # not join order
+    assert body["people"][1]["score"] == round(cos(v["ana"], v["cara"]), 4)
 
 
 def test_snowflake_through_the_connector(ranked, monkeypatch):
-    event_id, u, _ = ranked
+    event_id, u, v = ranked
     sf = snowflake_on(monkeypatch, FakeSnowflake(rows=[(uid(u["dan"]), 0.9), (uid(u["ben"]), 0.1)]))
     body = recs(u["ana"], event_id)
-    assert people_ids(body)[:2] == [uid(u["dan"]), uid(u["ben"])]
+    # Snowflake's scores win for the members it has; cara (missing) gets her pgvector score.
+    assert people_ids(body)[:3] == [uid(u["dan"]), uid(u["cara"]), uid(u["ben"])]
+    assert [p["score"] for p in body["people"][:3]] == [0.9, round(cos(v["ana"], v["cara"]), 4), 0.1]
     (_, params), = sf.statements("SELECT")
     assert (params["event_id"], params["viewer"]) == (event_id, uid(u["ana"]))
 
@@ -326,9 +380,9 @@ def test_agents_rerank(ranked, monkeypatch):
     assert sent["event"] == {"event_id": event_id, "type": "structured", "tone": "casual", "description": ""}
     assert sent["viewer"]["user_id"] == uid(ana) and sent["viewer"]["profile_text"].startswith("Event: ")
     assert sent["limit"] == 20  # 10 per type, two types
+    # Cara and Dan are at max_groups_per_user, so they're offered only through their group.
     assert [(c["candidate_type"], c["id"]) for c in sent["candidates"]] == [
-        ("user", uid(u["ben"])), ("user", uid(u["cara"])), ("user", uid(u["dan"])), ("user", uid(u["eve"])),
-        ("group", group_id),
+        ("user", uid(u["ben"])), ("user", uid(u["eve"])), ("group", group_id),
     ]
     assert all(set(c) == {"candidate_type", "id", "profile_text", "similarity"} for c in sent["candidates"])
     assert sent["candidates"][0]["similarity"] == round(cos(v["ana"], v["ben"]), 4)
@@ -347,6 +401,96 @@ def test_agents_never_see_other_peoples_handles(login_as, monkeypatch):
     (candidate,) = agents.calls[0]["json"]["candidates"]
     assert "@ana_private" not in candidate["profile_text"] and "Socials" not in candidate["profile_text"]
     assert "Event: " in candidate["profile_text"]
+
+
+def set_social_notes(client, notes: str) -> None:
+    """As if the SerpAPI lookup had run: store the notes and rebuild the user's match texts."""
+    with Session(dbmod.get_engine()) as db:
+        db.exec(update(Profile).where(Profile.user_id == uid(client)).values(social_notes=notes))
+        profiles.rebuild_member_texts(db, uid(client))
+        db.commit()
+
+
+def test_agents_never_see_handles_from_public_info(login_as, monkeypatch):
+    """SerpAPI notes ("Public info:") name the handle and often repeat it in page titles."""
+    event_id, u = setup_event(login_as, ["ana", "ben", "cara"], max_groups_per_user=2)
+    for name in ("ana", "ben"):
+        set_social_notes(u[name], f"GitHub @{name}-secret-gh: {name}-secret-gh (Real Name) - Builds climate apps")
+    group_id = form_group(u["ana"], u["cara"], event_id)
+    agents = use_agents(monkeypatch, FakeAgents(results=[]))
+    recs(u["ben"], event_id)
+
+    sent = agents.calls[0]["json"]
+    assert {(c["candidate_type"], c["id"]) for c in sent["candidates"]} == {
+        ("user", uid(u["ana"])), ("user", uid(u["cara"])), ("group", group_id),
+    }
+    others = json.dumps(sent["candidates"])
+    assert "ana-secret-gh" not in others and "Public info" not in others
+    assert "Member Ana:" in others  # the group text is there, just without the notes
+    assert "ben-secret-gh" in sent["viewer"]["profile_text"]  # the viewer's own notes stay
+
+
+def test_no_connection_is_held_while_waiting_on_the_network(ranked, monkeypatch):
+    """Gemini (viewer embed), its Snowflake sync, the Snowflake similarity query and the agents
+    rerank all run with every pooled connection checked back in."""
+    event_id, u, _ = ranked
+    set_embedding(event_id, u["ana"], None)
+    engine = dbmod.get_engine()
+    seen: dict[str, int] = {}
+    checkouts: list[str] = []
+
+    def held(stage: str) -> None:
+        seen[stage] = engine.pool.checkedout()
+
+    def on_checkout(*_):
+        checkouts.append(next(reversed(seen), "start"))
+
+    def gemini(url, json):
+        held("gemini")
+        values = [{"values": vec(d0=1)} for _ in json["requests"]]
+        return httpx.Response(200, json={"embeddings": values}, request=httpx.Request("POST", url))
+
+    gemini_on(monkeypatch, FakeGemini(gemini))
+    snowflake_on(monkeypatch)
+    monkeypatch.setattr(embeddings, "sync_to_snowflake", lambda rows: held("snowflake_sync"))
+    monkeypatch.setattr(snowflake_store, "similarities", lambda *a: held("snowflake_query") or {})
+
+    def rerank(req):
+        held("agents")
+        return [{"candidate_type": "user", "id": uid(u["ben"]), "score": 0.9, "reason": "ok"}]
+
+    use_agents(monkeypatch, FakeAgents(results=rerank))
+    event.listen(engine, "checkout", on_checkout)
+    try:
+        body = recs(u["ana"], event_id)
+    finally:
+        event.remove(engine, "checkout", on_checkout)
+
+    assert body["ranked_by"] == "gemini" and people_ids(body)[0] == uid(u["ben"])
+    assert seen == {"gemini": 0, "snowflake_sync": 0, "snowflake_query": 0, "agents": 0}
+    assert "agents" not in checkouts  # nothing touched the DB after the rerank started
+
+
+def test_agent_reasons_are_capped(ranked, monkeypatch):
+    event_id, u, _ = ranked
+    use_agents(monkeypatch, FakeAgents(results=[
+        {"candidate_type": "user", "id": uid(u["ben"]), "score": 0.9, "reason": "word " * 200},
+    ]))
+    reason = recs(u["ana"], event_id)["people"][0]["reason"]
+    assert len(reason) == agents_client.MAX_REASON_CHARS and reason.endswith("…")
+
+
+def test_type_the_agent_skipped_keeps_similarity_order(ranked, monkeypatch):
+    event_id, u, v = ranked
+    group_id = form_group(u["cara"], u["dan"], event_id)
+    use_agents(monkeypatch, FakeAgents(results=[
+        {"candidate_type": "group", "id": group_id, "score": 0.8, "reason": "Good team."},
+    ]))
+    body = recs(u["ana"], event_id)
+    assert body["ranked_by"] == "gemini" and group_ids(body) == [group_id]
+    assert people_ids(body) == [uid(u["ben"]), uid(u["eve"])]  # similarity order, not []
+    assert body["people"][0] == {"user_id": uid(u["ben"]), "name": "Ben", "summary": None,
+                                 "score": round(cos(v["ana"], v["ben"]), 4), "reason": None}
 
 
 @pytest.mark.parametrize(
