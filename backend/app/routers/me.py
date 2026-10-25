@@ -27,6 +27,9 @@ class ContactIn(BaseModel):
         v = v.strip()
         if not v:
             raise ValueError("must not be empty")
+        # One line of text: a newline would inject extra lines into the match profile_text.
+        if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in v):
+            raise ValueError("must not contain control characters or line breaks")
         return v
 
 

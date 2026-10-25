@@ -3,6 +3,7 @@
 import hashlib
 import math
 import time
+from datetime import timedelta
 
 import httpx
 import pytest
@@ -11,8 +12,11 @@ from sqlmodel import Session, select
 from app import db as dbmod
 from app.config import EMBEDDING_DIM, get_settings
 from app.models import EventMember
+from app.models.base import utcnow
 from app.services import embeddings, profiles, snowflake_store
 from tests.test_events import create, informal
+
+REAL_CONNECT = snowflake_store._connect
 
 
 # --- fakes ---------------------------------------------------------------------------------------
@@ -71,7 +75,7 @@ class FakeSnowflake:
     def __init__(self, rows=(), fail=False, delay=0.0):
         self.executed: list[tuple[str, dict | None]] = []
         self.rows, self.fail, self.delay = list(rows), fail, delay
-        self.connects = 0
+        self.connects = self.closes = 0
 
     def connect(self):
         self.connects += 1
@@ -81,7 +85,7 @@ class FakeSnowflake:
         return FakeCursor(self)
 
     def close(self):
-        pass
+        self.closes += 1
 
     def statements(self, prefix: str) -> list[tuple[str, dict | None]]:
         return [(sql, p) for sql, p in self.executed if sql.startswith(prefix)]
@@ -237,13 +241,122 @@ def test_join_syncs_to_snowflake(login_as, monkeypatch):
     merges = sf.statements("MERGE INTO PROFILE_EMBEDDINGS")
     assert len(creates) == 1 and sf.connects == 1  # table check and connection are reused
     assert "VECTOR(FLOAT, 768)" in creates[0][0]
-    assert [p["id"] for _, p in merges] == [m1.id, m2.id]
+    assert [p["id_0"] for _, p in merges] == [m1.id, m2.id]  # one join, one embedding, one MERGE
     params = merges[0][1]
-    assert set(params) == {"id", "event_id", "user_id", "embedding", "embedded_at"}  # no PII
-    assert (params["event_id"], params["user_id"]) == (event_id, m1.user_id)
-    assert len(params["embedding"].strip("[]").split(",")) == EMBEDDING_DIM
-    assert "PARSE_JSON(%(embedding)s)::ARRAY::VECTOR(FLOAT, 768)" in merges[0][0]
+    assert set(params) == {"id_0", "event_id_0", "user_id_0", "embedding_0", "embedded_at_0"}  # no PII
+    assert (params["event_id_0"], params["user_id_0"]) == (event_id, m1.user_id)
+    assert len(params["embedding_0"].strip("[]").split(",")) == EMBEDDING_DIM
+    assert "PARSE_JSON(column4)::ARRAY::VECTOR(FLOAT, 768)" in merges[0][0]
+    assert "FROM VALUES (%(id_0)s, %(event_id_0)s, %(user_id_0)s, %(embedding_0)s, %(embedded_at_0)s))" in merges[0][0]
     assert "WHEN MATCHED AND s.EMBEDDED_AT >= t.EMBEDDED_AT" in merges[0][0]
+
+
+def _row(i: int, at=None) -> snowflake_store.EmbeddingRow:
+    return snowflake_store.EmbeddingRow(f"em_{i:03}", "evt_1", f"usr_{i:03}", [0.1] * EMBEDDING_DIM,
+                                        at or utcnow())
+
+
+def test_upsert_batches_rows_into_few_merges(monkeypatch):
+    sf = snowflake_on(monkeypatch)
+    older = _row(0, utcnow() - timedelta(minutes=5))
+    rows = [older] + [_row(i) for i in range(30)]  # em_000 twice: only the newer vector is sent
+    snowflake_store.upsert_embeddings(rows)
+    merges = sf.statements("MERGE INTO PROFILE_EMBEDDINGS")
+    assert [len(p) for _, p in merges] == [25 * 5, 5 * 5]  # MERGE_BATCH rows per statement
+    sent = {p[f"id_{i}"]: p[f"embedded_at_{i}"] for _, p in merges for i in range(len(p) // 5)}
+    assert len(sent) == 30 and sent["em_000"] == rows[1].embedded_at.isoformat()
+    assert merges[1][0].count("(%(id_") == 5
+
+
+def test_writes_get_the_longer_write_deadline(monkeypatch):
+    sf = snowflake_on(monkeypatch, FakeSnowflake(delay=0.3), timeout=0.1)
+    monkeypatch.setattr(get_settings(), "snowflake_write_timeout_s", 5)
+    snowflake_store.upsert_embeddings([_row(1)])  # CREATE + MERGE take 0.6 s: fine for a write
+    assert len(sf.statements("MERGE")) == 1
+
+
+def test_a_timed_out_call_blocks_new_calls_until_it_ends(monkeypatch):
+    sf = snowflake_on(monkeypatch, FakeSnowflake(delay=0.5), timeout=0.1)
+    with pytest.raises(snowflake_store.SnowflakeError, match="timed out"):
+        snowflake_store.similarities("evt_1", [1.0] * EMBEDDING_DIM, "usr_a", 5)
+    assert sf.closes == 0  # the running call's connection is left alone
+    executed = len(sf.executed)
+    with pytest.raises(snowflake_store.SnowflakeError, match="still busy"):
+        snowflake_store.similarities("evt_1", [1.0] * EMBEDDING_DIM, "usr_a", 5)
+    assert len(sf.executed) == executed  # failed fast, nothing queued behind the stuck call
+
+    for future in list(snowflake_store._stuck):
+        future.result(timeout=5)
+    sf.delay = 0
+    assert snowflake_store.similarities("evt_1", [1.0] * EMBEDDING_DIM, "usr_a", 5) == {}
+    assert sf.connects == 1  # the connection survived the timeout
+
+
+def test_connector_timeouts_end_a_stuck_worker(monkeypatch):
+    import snowflake.connector
+
+    calls = []
+    snowflake_on(monkeypatch)
+    monkeypatch.setattr(snowflake_store, "_connect", REAL_CONNECT)
+    monkeypatch.setattr(snowflake.connector, "connect", lambda **kw: calls.append(kw) or FakeSnowflake())
+    monkeypatch.setattr(get_settings(), "snowflake_write_timeout_s", 30)
+    snowflake_store.similarities("evt_1", [1.0] * EMBEDDING_DIM, "usr_a", 5)
+    (params,) = calls
+    assert params["login_timeout"] == params["network_timeout"] == 30
+    assert params["session_parameters"] == {"STATEMENT_TIMEOUT_IN_SECONDS": 30}
+
+
+def test_failed_sync_is_backfilled_after_the_next_good_one(login_as, monkeypatch, db):
+    gemini_on(monkeypatch)
+    snowflake_on(monkeypatch, FakeSnowflake(fail=True))
+    event_id = joined_event(login_as)
+    (m1,) = members(event_id)
+    assert m1.embedding is not None and m1.snowflake_synced_at is None
+
+    sf = snowflake_on(monkeypatch, FakeSnowflake())
+    c = login_as("late@x.com", "Late")
+    assert c.post(f"/api/events/{event_id}/join", json={}).status_code == 201
+    m1, m2 = members(event_id)
+    assert m1.snowflake_synced_at is not None and m2.snowflake_synced_at is not None
+    merges = sf.statements("MERGE")
+    assert [p["id_0"] for _, p in merges] == [m2.id, m1.id]  # the new sync, then the backfill
+    assert snowflake_store.pending_rows(db, 10) == []
+
+
+def test_re_embedded_rows_are_pending_again(login_as, monkeypatch, db):
+    gemini_on(monkeypatch)
+    snowflake_on(monkeypatch)
+    event_id = joined_event(login_as)
+    (m,) = members(event_id)
+    assert m.snowflake_synced_at is not None
+    assert snowflake_store.pending_rows(db, 10) == []
+    row = db.get(EventMember, m.id)
+    row.embedded_at = m.snowflake_synced_at + timedelta(seconds=1)  # embedded after the last sync
+    db.add(row)
+    db.commit()
+    (pending,) = snowflake_store.pending_rows(db, 10)
+    assert pending.event_member_id == m.id and len(pending.embedding) == EMBEDDING_DIM
+
+
+def test_backfill_cli(login_as, monkeypatch, capsys):
+    gemini_on(monkeypatch)
+    snowflake_on(monkeypatch, FakeSnowflake(fail=True))
+    event_id = joined_event(login_as, n=3)
+    assert all(m.snowflake_synced_at is None for m in members(event_id))
+
+    sf = snowflake_on(monkeypatch, FakeSnowflake())
+    assert snowflake_store.main(["--backfill"]) == 0
+    assert "Synced 3 embedding(s) to Snowflake" in capsys.readouterr().out
+    assert all(m.snowflake_synced_at is not None for m in members(event_id))
+    (merge,) = sf.statements("MERGE")
+    assert len(merge[1]) == 3 * 5  # one statement for all three
+
+    snowflake_on(monkeypatch, FakeSnowflake(fail=True))
+    assert snowflake_store.main(["--backfill"]) == 0  # nothing pending: no Snowflake call
+    for key in ("account", "user"):
+        monkeypatch.setattr(get_settings(), f"snowflake_{key}", "REPLACE_ME")
+    assert snowflake_store.main(["--backfill"]) == 1
+    assert "not configured" in capsys.readouterr().err
 
 
 def test_snowflake_sync_failure_keeps_embedding(login_as, monkeypatch):
