@@ -146,6 +146,12 @@ def join_event(
     event_id: str, body: JoinBody, user: CurrentUser, db: DbSession, background: BackgroundTasks
 ):
     event = svc.get_visible_event(db, event_id, user)
+    if event.host_id == user.id:
+        raise AppError(
+            403,
+            "is_host",
+            "You're the host of this event — hosts manage the event and can't join as a participant",
+        )
     if svc.get_membership(db, event.id, user.id) is not None:
         raise AppError(409, "already_joined", "You already joined this event")
     questions = svc.event_questions(db, event.id)

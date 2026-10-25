@@ -136,6 +136,8 @@ export type GroupPage = {
   event_name: string;
   members: GroupMember[];
   thread_id: string;
+  /** Earliest member — treated as squad owner/founder. */
+  owner_user_id?: string | null;
 };
 
 export type Connection = {

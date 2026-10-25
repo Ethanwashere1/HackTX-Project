@@ -26,7 +26,7 @@ def default_group_name(db: Session, event_id: str) -> str:
     taken = set(db.exec(select(Group.name).where(Group.event_id == event_id)).all())
     name = ""
     for _ in range(10):
-        name = f"Team {secrets.choice(_ADJECTIVES)} {secrets.choice(_NOUNS)}"
+        name = f"Squad {secrets.choice(_ADJECTIVES)} {secrets.choice(_NOUNS)}"
         if name not in taken:
             return name
     return name
@@ -137,13 +137,19 @@ def _person(db: Session, user_id: str) -> dict:
 
 
 def group_payload(db: Session, group: Group) -> dict:
-    """The team page body. Includes contacts, so only return it to the group's members."""
+    """The squad page body. Includes contacts, so only return it to the group's members.
+
+    The earliest member is treated as the squad owner (hosts / founders can't \"join\" again).
+    """
+    member_ids = group_member_ids(db, group.id)
+    owner_id = member_ids[0] if member_ids else None
     return {
         "group_id": group.id,
         "event_id": group.event_id,
         "name": group.name,
         "thread_id": group.thread_id,
-        "members": [_person(db, uid) for uid in group_member_ids(db, group.id)],
+        "owner_user_id": owner_id,
+        "members": [_person(db, uid) for uid in member_ids],
     }
 
 

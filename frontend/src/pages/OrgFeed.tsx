@@ -3,12 +3,13 @@ import { Link } from "react-router-dom";
 import utCampus from "../assets/ut-campus.png";
 import { api } from "../api/client";
 import type { OrgFeed } from "../api/types";
+import { LocalSignals } from "../components/LocalSignals";
 import { useAuth } from "../auth/AuthContext";
 import "./OrgFeed.css";
 
 function tagClass(tag?: string) {
   if (!tag) return "su-badge-soft";
-  if (tag.includes("TEAM")) return "su-badge-warm";
+  if (tag.includes("SQUAD") || tag.includes("TEAM")) return "su-badge-warm";
   if (tag.includes("1:1")) return "su-badge-teal";
   if (tag.includes("SOCIAL")) return "su-badge-coral";
   return "su-badge-soft";
@@ -33,7 +34,7 @@ export function OrgFeedPage() {
     <div className="feed su-page su-fade-up">
       <div className="feed-hero">
         <div>
-          <h1 className="su-page-title">Hey {me?.name.split(" ")[0] ?? "there"}, find your next thing.</h1>
+          <h1 className="su-page-title">Hey {me?.name.split(" ")[0] ?? "there"}, find your squad.</h1>
           <p className="su-page-sub">
             Good friendships start with shared moments. What will you get into?
           </p>
@@ -94,12 +95,14 @@ export function OrgFeedPage() {
                 className={`su-btn ${evt.type === "structured" ? "su-btn-primary" : "su-btn-secondary"}`}
                 to={`/events/${evt.event_id}`}
               >
-                {evt.type === "structured" ? "Explore & find teammates →" : "Open event →"}
+                {evt.type === "structured" ? "Explore & find your squad →" : "Open event →"}
               </Link>
             </article>
           ))}
         </div>
       </section>
+
+      <LocalSignals />
 
       <aside className="feed-aside su-card">
         <h3>How matching works</h3>

@@ -56,8 +56,8 @@
   display: flex;
   gap: 0.6rem;
   align-items: center;
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 8px;
   padding: 0.65rem 0.75rem;
   color: #fff;
@@ -143,10 +143,16 @@
   text-transform: uppercase;
 }
 
-.shell-spaces a {
+.shell-space-link {
   display: block;
   color: rgba(255, 255, 255, 0.8);
   margin-bottom: 0.55rem;
+}
+
+/* Subtle current-space marker — never the teal Discover pill */
+.shell-space-link.is-current-space {
+  color: #fff;
+  font-weight: 600;
 }
 
 .shell-foot {
