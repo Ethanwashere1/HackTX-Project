@@ -1,0 +1,24 @@
+:root {
+  /* From HackTX Figma — SquadUp */
+  --su-ink: #0d1a13;
+  --su-ink-soft: #111f17;
+  --su-sidebar: #17394b;
+  --su-teal: #15776f;
+  --su-teal-bright: #5eceba;
+  --su-teal-deep: #1b4d3e;
+  --su-surface: #f3f5f4;
+  --su-card: #ffffff;
+  --su-border: rgba(23, 57, 75, 0.1);
+  --su-text: #17394b;
+  --su-text-muted: rgba(23, 57, 75, 0.62);
+  --su-warm: #b64f26;
+  --su-warm-soft: #ecd5a8;
+  --su-coral: #d4786a;
+  --su-danger: #c44536;
+  --su-success: #15776f;
+  --su-radius: 10px;
+  --su-radius-lg: 14px;
+  --su-shadow: 0 8px 28px rgba(13, 26, 19, 0.08);
+  --su-font: "Inter", system-ui, sans-serif;
+  --su-sidebar-w: 232px;
+}
