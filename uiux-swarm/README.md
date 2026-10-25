@@ -20,7 +20,7 @@ npx @grok/agent-sdk dev     # playground at http://127.0.0.1:3000/playground
 | --- | --- | --- |
 | `account` | Cursor account connectors | Host login / `CURSOR_API_KEY` |
 | `playwright` | Demo-route visual QA | `npx` pulls `@playwright/mcp` |
-| `figma` | Design tokens / frames | `npx @grok/agent-sdk mcp oauth figma` |
+| `figma` | Design tokens / frames / FigJam | Connect Figma in Cursor Settings → Tools & MCP (catalog client). CLI OAuth is blocked by Figma (403). |
 | `axe` | Deque axe MCP scans | Optional: set `AXE_API_KEY`; else use `axe_checklist` tool + Playwright |
 | `shadcn` | Component registry | `npx` pulls `shadcn` MCP |
 
