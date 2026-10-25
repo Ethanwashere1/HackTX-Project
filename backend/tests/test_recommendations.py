@@ -185,9 +185,11 @@ def test_open_groups_are_scored_by_member_similarity(ranked):
     body = recs(u["ana"], event_id)
     (group,) = body["groups"]
     expected = round((cos(v["ana"], v["cara"]) + cos(v["ana"], v["dan"])) / 2, 4)
+    # Both members join in the same transaction, so their order is a tie broken by random id bits.
+    members = sorted(group.pop("members"), key=lambda m: m["name"])
+    assert members == [{"user_id": uid(u["cara"]), "name": "Cara"}, {"user_id": uid(u["dan"]), "name": "Dan"}]
     assert group == {
         "group_id": group_id, "name": group["name"], "size": 2, "max_size": 4,
-        "members": [{"user_id": uid(u["cara"]), "name": "Cara"}, {"user_id": uid(u["dan"]), "name": "Dan"}],
         "score": expected, "reason": None,
     }
     assert group["name"].startswith("Team ")
