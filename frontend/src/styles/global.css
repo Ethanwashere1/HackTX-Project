@@ -1,0 +1,81 @@
+@import "./tokens.css";
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--su-font);
+  color: var(--su-text);
+  background: var(--su-surface);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+img {
+  max-width: 100%;
+  display: block;
+}
+
+:focus-visible {
+  outline: 2px solid var(--su-teal);
+  outline-offset: 2px;
+}
+
+@keyframes su-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes su-pulse {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.su-fade-up {
+  animation: su-fade-up 0.45s ease both;
+}
+
+.su-fade-up-delay {
+  animation: su-fade-up 0.55s ease 0.08s both;
+}
+
+.su-pulse {
+  animation: su-pulse 1.6s ease-in-out infinite;
+}
