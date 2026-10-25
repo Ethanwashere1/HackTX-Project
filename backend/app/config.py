@@ -69,7 +69,9 @@ class Settings(BaseSettings):
     snowflake_schema: str = ""
     snowflake_role: str = ""
     snowflake_table: str = "PROFILE_EMBEDDINGS"
-    snowflake_timeout_s: float = 5
+    snowflake_timeout_s: float = 5  # reads (similarity queries)
+    # Writes (embedding sync, deletes): may include the login, a warehouse resume and CREATE TABLE.
+    snowflake_write_timeout_s: float = 30
 
     serpapi_api_key: str = ""
     serpapi_timeout_s: float = 8

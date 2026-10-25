@@ -9,7 +9,6 @@ call fails, the embedding stays null (recommendations still work, just without s
 import logging
 import math
 from dataclasses import dataclass
-from datetime import datetime
 
 import httpx
 from sqlmodel import Session, select, update
@@ -119,8 +118,8 @@ def embed_members(member_ids: list[str], *, sync: bool = True) -> None:
     except Exception:
         log.exception("Embedding %d member(s) failed", len(member_ids))
         return
-    if sync and stored:
-        sync_to_snowflake(stored)
+    if sync and stored and sync_to_snowflake(stored):
+        sync_pending_to_snowflake()  # Snowflake is reachable: retry earlier failed syncs
 
 
 def _embed_and_store(member_ids: list[str]) -> list[snowflake_store.EmbeddingRow]:
@@ -150,28 +149,31 @@ def _embed_and_store(member_ids: list[str]) -> list[snowflake_store.EmbeddingRow
         return stored
 
 
-def sync_to_snowflake(rows: list[snowflake_store.EmbeddingRow]) -> None:
-    """Upsert the vectors into Snowflake and set snowflake_synced_at. Never raises."""
+def sync_to_snowflake(rows: list[snowflake_store.EmbeddingRow]) -> bool:
+    """Upsert the vectors into Snowflake and set snowflake_synced_at. Returns whether the upsert
+    succeeded; never raises. A failed sync is retried later by sync_pending_to_snowflake()."""
     if not rows or not get_settings().snowflake_configured:
-        return
+        return False
     try:
         snowflake_store.upsert_embeddings(rows)
     except Exception as exc:
         log.warning("Snowflake sync of %d member(s) failed: %s", len(rows), exc)
-        return
+        return False
     try:
         with Session(dbmod.get_engine()) as db:
-            for row in rows:
-                _mark_synced(db, row.event_member_id, row.embedded_at)
+            snowflake_store.mark_synced(db, rows)
             db.commit()
     except Exception:
         log.exception("Recording the Snowflake sync failed")
+    return True
 
 
-def _mark_synced(db: Session, member_id: str, embedded_at: datetime) -> None:
-    # Skipped if the member was re-embedded meanwhile; that run syncs its own vector.
-    db.exec(
-        update(EventMember)
-        .where(EventMember.id == member_id, EventMember.embedded_at == embedded_at)
-        .values(snowflake_synced_at=utcnow())
-    )
+def sync_pending_to_snowflake() -> None:
+    """Backfill a capped batch of vectors whose earlier sync failed. Never raises."""
+    try:
+        with Session(dbmod.get_engine()) as db:
+            sent = snowflake_store.sync_pending(db, snowflake_store.BACKFILL_LIMIT)
+        if sent:
+            log.info("Backfilled %d embedding(s) to Snowflake", sent)
+    except Exception as exc:
+        log.warning("Snowflake backfill failed: %s", exc)
