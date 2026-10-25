@@ -126,8 +126,9 @@ def test_team_page_for_members_only(trio, login_as):
     gid = form_group(ana, ben, e)
 
     body = ben.get(f"/api/groups/{gid}").json()
-    assert set(body) == {"group_id", "event_id", "name", "thread_id", "members"}
-    assert body["group_id"] == gid and body["event_id"] == e and body["name"].startswith("Team ")
+    assert set(body) == {"group_id", "event_id", "name", "thread_id", "owner_user_id", "members"}
+    assert body["group_id"] == gid and body["event_id"] == e and body["name"].startswith("Squad ")
+    assert body["owner_user_id"] in (uid(ana), uid(ben))  # the earliest member
     by_id = {m["user_id"]: m for m in body["members"]}
     assert set(by_id) == {uid(ana), uid(ben)}
     assert by_id[uid(ana)] == {"user_id": uid(ana), "name": "Ana", "summary": None,

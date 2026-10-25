@@ -157,7 +157,7 @@ def test_messages_carry_the_sender_name(squad):
 def test_my_profile_before_joining_anything(login_as):
     ana = login_as("ana@utexas.edu", "Ana Ruiz")
     assert ana.get("/api/me/profile").json() == {
-        "user_id": uid(ana), "name": "Ana Ruiz", "email": "ana@utexas.edu", "summary": None,
+        "user_id": uid(ana), "name": "Ana Ruiz", "email": "ana@utexas.edu", "overview": None, "summary": None,
         "traits": None, "socials": [], "contacts": [], "interviewed": False,
     }
 
@@ -179,7 +179,7 @@ def test_my_profile_shows_own_data_without_notes_or_transcript(login_as, db):
 
     body = ana.get("/api/me/profile").json()
     assert body == {
-        "user_id": uid(ana), "name": "Ana", "email": "ana@utexas.edu", "summary": "Frontend dev",
+        "user_id": uid(ana), "name": "Ana", "email": "ana@utexas.edu", "overview": None, "summary": "Frontend dev",
         "traits": {"ambition": "win"}, "socials": [{"kind": "github", "value": "ana-r"}],
         "contacts": [{"kind": "discord", "value": "ana#1"}], "interviewed": True,
     }

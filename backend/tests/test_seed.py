@@ -157,8 +157,7 @@ def test_reset_keeps_real_users_seed_org_membership_and_events(seeded, login_as,
     # the demo). They host an event in it and also join the seed HackTX event.
     real = login_as("real@utexas.edu", "Real Person")
     assert real.post(f"/api/orgs/{seeded.org_id}/join").json() == {"status": "approved"}
-    own_event = make_event(real, org_id=seeded.org_id)
-    join(real, own_event)
+    own_event = make_event(real, org_id=seeded.org_id)  # hosts can't join their own event
     q = real.get(f"/api/events/{seeded.events['hacktx']}").json()["questions"]
     resp = real.post(f"/api/events/{seeded.events['hacktx']}/join", json={
         "answers": [{"question_id": q[0]["question_id"], "value": "Frontend"},
@@ -189,7 +188,7 @@ def test_reset_keeps_real_users_seed_org_membership_and_events(seeded, login_as,
     assert db.exec(select(Event.id, Event.org_id)).all() == [(own_event, org.id)]
     user = db.get(User, uid(real))
     assert user is not None and user.email == "real@utexas.edu"
-    assert db.exec(select(EventMember.event_id).where(EventMember.user_id == user.id)).all() == [own_event]
+    assert db.exec(select(EventMember.event_id).where(EventMember.user_id == user.id)).all() == []
     assert db.exec(select(Profile).where(Profile.user_id == user.id)).first() is not None
     assert db.exec(select(ContactMethod.value).where(ContactMethod.user_id == user.id)).all() == ["real#1"]
     assert real.get(f"/api/events/{own_event}").status_code == 200  # still signed in
@@ -216,10 +215,12 @@ def test_reset_keeps_real_users_seed_org_membership_and_events(seeded, login_as,
 
 
 def test_reset_keeps_seed_users_that_real_users_team_up_or_chat_with(seeded, login_as, db):
-    # A real host's own (unlisted) events, where seed users take part via dev login.
+    # A real organizer's (unlisted) events, where a real user and seed users (via dev login) take
+    # part. Hosts can't join their own events, so Hannah is a participant.
+    organizer = login_as("organizer@gmail.com", "Olive Organizer")
     host = login_as("host@gmail.com", "Hannah Host")
     ana, ben, cara = (as_seed(login_as, k) for k in ("ana", "ben", "cara"))
-    team_event = make_event(host)
+    team_event = make_event(organizer)
     for c in (host, ana, cara):
         join(c, team_event)
     group_id = form_group(host, ana, team_event)  # grouped with a seed user
@@ -227,7 +228,7 @@ def test_reset_keeps_seed_users_that_real_users_team_up_or_chat_with(seeded, log
     for c, text in ((host, "hi Ana"), (ana, "hi Hannah")):  # and chatting
         assert c.post(f"/api/threads/{thread_id}/messages", json={"text": text}).status_code == 201
     pending = send_ok(cara, team_event, uid(host))["request_id"]
-    study_event = make_event(host, type="informal")
+    study_event = make_event(organizer, type="informal")
     join(host, study_event)
     join(ben, study_event)
     connection_id = accept_ok(host, send_ok(ben, study_event, uid(host))["request_id"])["connection_id"]

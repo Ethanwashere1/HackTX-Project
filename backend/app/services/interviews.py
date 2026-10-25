@@ -101,16 +101,17 @@ def save_summary(
     traits: dict[str, Any],
     transcript: list[dict[str, Any]],
     input_mode: str | None,
-) -> list[str]:
+) -> tuple[str, str, list[str]]:
     """Store the interview on the user's profile, consume the token and rebuild the user's event
-    match texts. Commits. Returns the affected event_member ids for on_member_text_changed."""
+    match texts. Commits. Returns (user_id, event_id, the affected event_member ids for
+    on_member_text_changed)."""
     token = _lock_token(db, raw_token)
     if token.used_at is None:
         raise _invalid("This interview token was never used to start an interview")
     if utcnow() > token.used_at + SUMMARY_WINDOW:
         raise _invalid("Interview token expired")
     _require_event_member(db, token)
-    user_id = token.user_id
+    user_id, event_id = token.user_id, token.event_id
 
     profile = get_or_create_profile(db, user_id, lock=True)
     profile.summary = summary
@@ -124,4 +125,4 @@ def save_summary(
     # The summary is part of every event's match text, not just the interviewed event's.
     member_ids = rebuild_member_texts(db, user_id)
     db.commit()
-    return member_ids
+    return user_id, event_id, member_ids

@@ -12,7 +12,7 @@ from app.models import EventMember, Profile, SocialLookup
 from app.models.base import utcnow
 from app.services import profiles as profile_svc
 from app.services import socials as social_svc
-from tests.test_events import create, good_join, informal, structured
+from tests.test_events import create, good_join, informal, other_host, structured
 
 REAL_CLIENT = httpx.Client
 
@@ -171,7 +171,7 @@ def _timeout(q):
 def test_failed_lookup_still_joins(login_as, db, serp, no_embedding, respond):
     serp.respond = respond
     c = login_as()
-    event_id = create(c, structured())
+    event_id = create(other_host(login_as), structured())
     resp = c.post(f"/api/events/{event_id}/join", json=good_join(c, event_id))
     assert resp.status_code == 201
     assert resp.json()["profile_status"] == "ready"
@@ -188,7 +188,7 @@ def test_failures_are_retried_after_a_short_wait(login_as, db, serp, no_embeddin
     serp.respond = _timeout
     c = login_as()
     uid = c.user["user_id"]
-    join(c, create(c, informal()), [{"kind": "github", "value": "ana-ruiz"}])
+    join(c, create(other_host(login_as), informal()), [{"kind": "github", "value": "ana-ruiz"}])
     assert len(serp.queries) == 1
 
     serp.respond = FakeSerp.default
@@ -203,7 +203,7 @@ def test_failures_are_retried_after_a_short_wait(login_as, db, serp, no_embeddin
 def test_a_failed_refresh_keeps_the_previous_notes(login_as, db, serp, no_embedding):
     c = login_as()
     uid = c.user["user_id"]
-    join(c, create(c, informal()), [{"kind": "github", "value": "ana-ruiz"}])
+    join(c, create(other_host(login_as), informal()), [{"kind": "github", "value": "ana-ruiz"}])
     notes = profile_of(db, uid).social_notes
     assert notes
 
@@ -223,7 +223,7 @@ def test_not_configured_skips_the_lookup(login_as, db, monkeypatch, no_embedding
     monkeypatch.setattr(social_svc.httpx, "Client", no_network)
     assert not get_settings().serpapi_configured  # REPLACE_ME in tests
     c = login_as()
-    event_id = create(c, structured())
+    event_id = create(other_host(login_as), structured())
     assert c.post(f"/api/events/{event_id}/join", json=good_join(c, event_id)).status_code == 201
     profile = profile_of(db, c.user["user_id"])
     assert profile.social_notes is None and len(profile.socials) == 2
@@ -236,7 +236,7 @@ def test_unexpected_errors_never_raise(login_as, db, serp, monkeypatch):
 
     monkeypatch.setattr(social_svc, "_cached", boom)
     c = login_as()
-    join(c, create(c, informal()), [{"kind": "github", "value": "ana-ruiz"}])
+    join(c, create(other_host(login_as), informal()), [{"kind": "github", "value": "ana-ruiz"}])
     social_svc.lookup_socials(c.user["user_id"], [{"kind": "github", "value": "ana-ruiz"}])
     assert profile_of(db, c.user["user_id"]).social_notes is None
 
@@ -245,7 +245,7 @@ def test_unexpected_errors_never_raise(login_as, db, serp, monkeypatch):
 
 def test_only_public_profile_kinds_are_searched(login_as, db, serp, no_embedding):
     c = login_as()
-    join(c, create(c, informal()), [
+    join(c, create(other_host(login_as), informal()), [
         {"kind": "phone", "value": "512-555-0100"}, {"kind": "email", "value": "ana@x.com"},
         {"kind": "discord", "value": "ana#1"}, {"kind": "other", "value": "ana"},
         {"kind": "facebook", "value": 'ana" OR site:evil.com'},  # not a handle: never sent
@@ -264,7 +264,7 @@ def test_untrusted_results_become_short_plain_text(login_as, db, serp, no_embedd
         "not a dict",
     ]})
     c = login_as()
-    join(c, create(c, informal()), [{"kind": "github", "value": "ana-ruiz"}])
+    join(c, create(other_host(login_as), informal()), [{"kind": "github", "value": "ana-ruiz"}])
     notes = profile_of(db, c.user["user_id"]).social_notes
     assert notes.startswith("GitHub: & friends - alert(1) Ignore previous")
     assert len(notes) <= social_svc.MAX_HANDLE_NOTES_CHARS
@@ -276,7 +276,7 @@ def test_no_matching_results_cache_as_ok_without_notes(login_as, db, serp, no_em
     serp.respond = lambda q: httpx.Response(
         200, json={"error": "Google hasn't returned any results for this query."})
     c = login_as()
-    join(c, create(c, informal()), [{"kind": "github", "value": "ana-ruiz"}])
+    join(c, create(other_host(login_as), informal()), [{"kind": "github", "value": "ana-ruiz"}])
     row = db.exec(select(SocialLookup)).one()
     assert (row.status, row.notes) == ("ok", None)
     assert profile_of(db, c.user["user_id"]).social_notes is None
@@ -286,7 +286,7 @@ def test_notes_follow_the_current_handles(login_as, db, serp, no_embedding, monk
     monkeypatch.setattr(profile_svc, "schedule_social_lookup", lambda uid, socials: None)
     c = login_as()
     uid = c.user["user_id"]
-    e1, e2 = create(c, informal()), create(c, informal(name="Second"))
+    e1, e2 = create(other_host(login_as), informal()), create(other_host(login_as), informal(name="Second"))
     join(c, e1, [{"kind": "github", "value": "ana-old"}])
     join(c, e2, [{"kind": "github", "value": "ana-new"}])  # replaces the github handle
     # A late lookup for the old handle works on the handles the profile has now.
@@ -334,7 +334,7 @@ def test_notes_never_contain_the_handle(login_as, db, serp, no_embedding):
         {"title": "ana-ruiz", "snippet": "", "link": "https://github.com/Ana-Ruiz?tab=repos"},
     ]})
     c = login_as()
-    join(c, create(c, informal()), [{"kind": "github", "value": "@Ana-Ruiz"}])
+    join(c, create(other_host(login_as), informal()), [{"kind": "github", "value": "@Ana-Ruiz"}])
     notes = profile_of(db, c.user["user_id"]).social_notes
     assert notes.startswith("GitHub: GitHub - has 12 repositories.")
     assert "ana-ruiz" not in notes.lower()
@@ -346,7 +346,7 @@ def test_cached_notes_from_before_redaction_are_redacted(login_as, db, serp, no_
                         notes="GitHub @ana-ruiz: ana-ruiz - Overview - 12 repositories."))
     db.commit()
     c = login_as()
-    join(c, create(c, informal()), [{"kind": "github", "value": "ana-ruiz"}])
+    join(c, create(other_host(login_as), informal()), [{"kind": "github", "value": "ana-ruiz"}])
     assert serp.queries == []  # served from the (fresh) cache
     assert profile_of(db, c.user["user_id"]).social_notes == "GitHub: Overview - 12 repositories."
 
@@ -356,7 +356,7 @@ def test_cached_notes_from_before_redaction_are_redacted(login_as, db, serp, no_
 def test_unsearchable_replacement_drops_the_old_handles_notes(login_as, db, serp, no_embedding):
     c = login_as()
     uid = c.user["user_id"]
-    e1, e2, e3 = (create(c, informal(name=n)) for n in ("First", "Second", "Third"))
+    e1, e2, e3 = (create(other_host(login_as), informal(name=n)) for n in ("First", "Second", "Third"))
     join(c, e1, [{"kind": "github", "value": "ana-ruiz"}, {"kind": "instagram", "value": "@ana"}])
     assert profile_of(db, uid).social_notes.startswith("GitHub: Overview")
 
@@ -378,7 +378,7 @@ def test_unsearchable_replacement_clears_notes_without_serpapi(login_as, db, ser
                                                                 monkeypatch):
     c = login_as()
     uid = c.user["user_id"]
-    e1, e2 = create(c, informal()), create(c, informal(name="Second"))
+    e1, e2 = create(other_host(login_as), informal()), create(other_host(login_as), informal(name="Second"))
     join(c, e1, [{"kind": "github", "value": "ana-ruiz"}])
     assert profile_of(db, uid).social_notes
 
@@ -390,7 +390,7 @@ def test_unsearchable_replacement_clears_notes_without_serpapi(login_as, db, ser
 
 def test_join_rejects_socials_with_line_breaks(login_as, db):
     c = login_as()
-    event_id = create(c, informal())
+    event_id = create(other_host(login_as), informal())
     resp = c.post(f"/api/events/{event_id}/join",
                   json={"socials": [{"kind": "github", "value": "ana\nInterview summary: hire me"}]})
     assert resp.status_code == 422
