@@ -118,14 +118,13 @@ def refresh_member_texts(
 def on_member_text_changed(member_ids: list[str]) -> None:
     """Hook: these event members' `profile_text` changed and is committed.
 
-    Runs as a background task after the response, so it must open its own DB session
-    (`with Session(app.db.get_engine()) as db:`) and must never raise into the caller.
-
-    TODO(embeddings builder): embed each member's profile_text with Gemini, store it in
-    `event_members.embedding` + `embedded_at` (pgvector) and sync to Snowflake
-    (`snowflake_synced_at`). Skip while not configured; leave the embedding null on failure.
+    Runs as a background task after the response: embeds each profile_text with Gemini into
+    `event_members.embedding` (pgvector) and syncs it to Snowflake. Opens its own DB session,
+    skips while Gemini isn't configured, leaves the embedding null on failure and never raises.
     """
-    log.debug("member texts changed: %s; embedding not implemented yet", member_ids)
+    from app.services.embeddings import embed_members
+
+    embed_members(member_ids)
 
 
 def schedule_social_lookup(user_id: str, socials: list[dict[str, Any]]) -> None:
