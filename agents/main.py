@@ -1,11 +1,12 @@
 import hmac
-from typing import Literal, Optional
+import json
+from typing import Annotated, Any, Literal, Optional
 
 from fastapi import Depends, FastAPI, Header, Query, Request, WebSocket
 from fastapi.concurrency import run_in_threadpool
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, BeforeValidator, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from agents import (
@@ -61,6 +62,32 @@ def require_internal_key(x_internal_key: Optional[str] = Header(None)) -> None:
 class SummarizeRequest(BaseModel):
     transcript: str
 
+def _stringify_traits(value: Any) -> Any:
+    """Coerce trait values to short strings so stored traits never 422.
+
+    profile.traits can hold non-string values (interview.py posts {"highlights": [...]}), and the
+    backend forwards them as-is to /recommend and /profile-overview. Lists join with ", ",
+    objects become JSON, empty values are dropped. Non-dict input is left for normal validation.
+    """
+    if not isinstance(value, dict):
+        return value
+    out: dict[str, str] = {}
+    for key, raw in value.items():
+        if raw is None:
+            continue
+        if isinstance(raw, (list, tuple)):
+            text = ", ".join(str(x).strip() for x in raw if x is not None and str(x).strip())
+        elif isinstance(raw, dict):
+            text = json.dumps(raw, ensure_ascii=False)
+        else:
+            text = str(raw)
+        if text.strip():
+            out[str(key)] = text.strip()
+    return out
+
+# Trait map: string values (contract shape); other JSON values are coerced, not rejected.
+Traits = Annotated[dict[str, str], BeforeValidator(_stringify_traits)]
+
 # POST /recommend request (CONTRACT.md section 8)
 class RecommendEvent(BaseModel):
     event_id: str
@@ -71,7 +98,7 @@ class RecommendEvent(BaseModel):
 class RecommendViewer(BaseModel):
     user_id: str
     profile_text: str = ""
-    traits: dict[str, str] = Field(default_factory=dict)
+    traits: Traits = Field(default_factory=dict)
     topic_signals: list[str] = Field(default_factory=list)
     group_need: Optional[str] = None
 
@@ -80,7 +107,7 @@ class RecommendCandidate(BaseModel):
     id: str
     profile_text: str = ""
     similarity: Optional[float] = None
-    traits: dict[str, str] = Field(default_factory=dict)
+    traits: Traits = Field(default_factory=dict)
     topic_signals: list[str] = Field(default_factory=list)
     group_need: Optional[str] = None
 
@@ -106,7 +133,7 @@ class ProfileOverviewPayload(BaseModel):
     fields: dict = Field(default_factory=dict)
     social_notes: Optional[str] = None
     interview_summary: Optional[str] = None
-    interview_traits: dict[str, str] = Field(default_factory=dict)
+    interview_traits: Traits = Field(default_factory=dict)
     event: Optional[ProfileOverviewEvent] = None
 
 class ExistingQuestion(BaseModel):

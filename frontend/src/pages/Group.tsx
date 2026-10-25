@@ -1,21 +1,27 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api/client";
+import { errorMessage } from "../api/errors";
 import type { GroupPage } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
 import { Avatar } from "../components/Avatar";
 
 export function GroupPageView() {
-  const { groupId = "grp_pixel" } = useParams();
+  const { groupId = "" } = useParams();
   const { me } = useAuth();
   const [group, setGroup] = useState<GroupPage | null>(null);
+  const [eventName, setEventName] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    void api
+    api
       .getGroup(groupId)
-      .then(setGroup)
-      .catch((e: Error) => setError(e.message));
+      .then((g) => {
+        setGroup(g);
+        // The squad page body has only event_id; the name is a nicety.
+        return api.getEvent(g.event_id).then((e) => setEventName(e.name)).catch(() => undefined);
+      })
+      .catch((e: unknown) => setError(errorMessage(e)));
   }, [groupId]);
 
   if (error) return <div className="su-page">Error: {error}</div>;
@@ -31,8 +37,8 @@ export function GroupPageView() {
         {group.name}
       </h1>
       <p className="su-page-sub">
-        {group.event_name} · contacts visible to members only
-        {owner ? ` · Owner: ${owner.name}${isOwner ? " (you)" : ""}` : ""}
+        {eventName ?? "Event"} · {group.members.length} members · contacts visible to members only
+        {owner ? ` · Owner: ${owner.name ?? "Member"}${isOwner ? " (you)" : ""}` : ""}
       </p>
       {isOwner ? (
         <p style={{ color: "var(--su-text-muted)", marginTop: "-0.5rem" }}>
@@ -41,9 +47,11 @@ export function GroupPageView() {
       ) : null}
 
       <div style={{ display: "flex", gap: "0.75rem", marginBottom: "1.25rem", flexWrap: "wrap" }}>
-        <Link className="su-btn su-btn-primary" to={`/threads/${group.thread_id}`}>
-          Open squad chat
-        </Link>
+        {group.thread_id ? (
+          <Link className="su-btn su-btn-primary" to={`/threads/${group.thread_id}`}>
+            Open squad chat
+          </Link>
+        ) : null}
         <Link className="su-btn su-btn-secondary" to={`/events/${group.event_id}`}>
           Back to event
         </Link>
@@ -53,31 +61,37 @@ export function GroupPageView() {
         {group.members.map((m) => (
           <article key={m.user_id} className="su-card" style={{ padding: "1.15rem" }}>
             <div style={{ display: "flex", gap: "0.75rem", alignItems: "center" }}>
-              <Avatar name={m.name} size={44} />
+              <Avatar name={m.name ?? "?"} size={44} />
               <div>
                 <h3 style={{ margin: 0 }}>
-                  {m.name}
+                  {m.name ?? "Member"}
                   {m.user_id === group.owner_user_id ? (
                     <span className="su-badge su-badge-warm" style={{ marginLeft: "0.5rem" }}>
                       Owner
                     </span>
                   ) : null}
                 </h3>
-                <p style={{ margin: 0, color: "var(--su-text-muted)", fontSize: "0.85rem" }}>
-                  {m.role}
-                </p>
+                {m.user_id === me?.user_id ? (
+                  <p style={{ margin: 0, color: "var(--su-text-muted)", fontSize: "0.85rem" }}>You</p>
+                ) : null}
               </div>
             </div>
             {m.summary ? (
               <p style={{ color: "var(--su-text-muted)", lineHeight: 1.5 }}>{m.summary}</p>
             ) : null}
-            <ul style={{ margin: 0, paddingLeft: "1.1rem", lineHeight: 1.7 }}>
-              {(m.contacts ?? []).map((c) => (
-                <li key={`${c.kind}-${c.value}`}>
-                  <strong>{c.kind}</strong>: {c.value}
-                </li>
-              ))}
-            </ul>
+            {m.contacts.length ? (
+              <ul style={{ margin: 0, paddingLeft: "1.1rem", lineHeight: 1.7 }}>
+                {m.contacts.map((c) => (
+                  <li key={`${c.kind}-${c.value}`}>
+                    <strong>{c.kind}</strong>: {c.value}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p style={{ margin: 0, color: "var(--su-text-muted)", fontSize: "0.85rem" }}>
+                No contact methods shared yet.
+              </p>
+            )}
           </article>
         ))}
       </div>

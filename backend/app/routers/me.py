@@ -8,8 +8,7 @@ from sqlmodel import delete
 
 from app.auth.deps import CurrentUser, DbSession
 from app.models import ContactMethod
-from app.services import profiles as profile_svc
-from app.services.users import list_contacts, me_payload
+from app.services.users import list_contacts, me_payload, my_profile_payload
 
 router = APIRouter(prefix="/api/me", tags=["me"])
 
@@ -28,6 +27,9 @@ class ContactIn(BaseModel):
         v = v.strip()
         if not v:
             raise ValueError("must not be empty")
+        # One line of text: a newline would inject extra lines into the match profile_text.
+        if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in v):
+            raise ValueError("must not contain control characters or line breaks")
         return v
 
 
@@ -42,19 +44,7 @@ def get_me(user: CurrentUser, db: DbSession):
 
 @router.get("/profile")
 def get_my_profile(user: CurrentUser, db: DbSession):
-    """Shared person profile: overview, interview summary/traits, contacts, socials."""
-    profile = profile_svc.get_or_create_profile(db, user.id)
-    db.commit()  # persist an empty profile row if this was the first touch
-    return {
-        "user_id": user.id,
-        "name": user.name,
-        "email": user.email,
-        "overview": profile.overview,
-        "summary": profile.summary,
-        "traits": dict(profile.traits) if profile.traits else {},
-        "contacts": list_contacts(db, user.id),
-        "socials": list(profile.socials) if profile.socials else [],
-    }
+    return my_profile_payload(db, user)
 
 
 @router.put("/contacts")

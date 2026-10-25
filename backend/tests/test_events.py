@@ -34,6 +34,11 @@ def informal(**overrides) -> dict:
     return body
 
 
+def other_host(login_as):
+    """A separate host: hosts can't join their own events (403 is_host)."""
+    return login_as("host@x.com", "Hannah Host")
+
+
 def create(client, body) -> str:
     resp = client.post("/api/events", json=body)
     assert resp.status_code == 201, resp.text
@@ -219,14 +224,20 @@ def test_join_stores_answers_and_builds_profile(login_as, db):
 
 def test_join_twice_is_409(login_as):
     c = login_as()
-    event_id = create(c, informal())
+    event_id = create(other_host(login_as), informal())
     assert c.post(f"/api/events/{event_id}/join", json={}).status_code == 201
     assert_error(c.post(f"/api/events/{event_id}/join", json={}), 409, "already_joined")
 
 
+def test_host_cannot_join_own_event(login_as):
+    c = login_as()
+    event_id = create(c, informal())
+    assert_error(c.post(f"/api/events/{event_id}/join", json={}), 403, "is_host")
+
+
 def test_optional_answers_may_be_omitted(login_as):
     c = login_as()
-    event_id = create(c, structured())
+    event_id = create(other_host(login_as), structured())
     body = good_join(c, event_id)
     body["answers"] = body["answers"][:1]
     assert c.post(f"/api/events/{event_id}/join", json=body).status_code == 201
@@ -234,7 +245,7 @@ def test_optional_answers_may_be_omitted(login_as):
 
 def test_answer_kinds(login_as, db):
     c = login_as()
-    event_id = create(c, structured(required_fields=[], questions=[
+    event_id = create(other_host(login_as), structured(required_fields=[], questions=[
         {"text": "Langs", "kind": "multi_choice", "options": ["py", "ts", "go"], "required": True},
         {"text": "Years", "kind": "number", "required": True},
     ]))
@@ -284,7 +295,7 @@ def _mutations():
 @pytest.mark.parametrize("mutate", _mutations(), ids=lambda f: f.__name__)
 def test_join_rejects_invalid_answers(login_as, db, mutate):
     c = login_as()
-    event_id = create(c, structured())
+    event_id = create(other_host(login_as), structured())
     body = good_join(c, event_id)
     mutate(body)
     assert_error(c.post(f"/api/events/{event_id}/join", json=body), 422, "invalid_answers")
@@ -301,8 +312,8 @@ def test_join_rejects_unknown_social_kind(login_as):
 
 def test_answers_to_another_events_questions_are_rejected(login_as):
     c = login_as()
-    a = create(c, structured())
-    b = create(c, structured())
+    a = create(other_host(login_as), structured())
+    b = create(other_host(login_as), structured())
     body = good_join(c, a)
     assert_error(c.post(f"/api/events/{b}/join", json=body), 422, "invalid_answers")
 
@@ -311,7 +322,7 @@ def test_answers_to_another_events_questions_are_rejected(login_as):
 
 def test_interview_token(login_as, db):
     c = login_as()
-    event_id = create(c, structured())
+    event_id = create(other_host(login_as), structured())
     assert_error(c.post(f"/api/events/{event_id}/interview"), 403, "forbidden")
     c.post(f"/api/events/{event_id}/join", json=good_join(c, event_id))
 
@@ -334,6 +345,6 @@ def test_interview_token(login_as, db):
 
 def test_interview_disabled_is_409(login_as):
     c = login_as()
-    event_id = create(c, informal())
+    event_id = create(other_host(login_as), informal())
     c.post(f"/api/events/{event_id}/join", json={})
     assert_error(c.post(f"/api/events/{event_id}/interview"), 409, "interview_disabled")

@@ -20,6 +20,8 @@ export default defineConfig({
   },
   test: {
     environment: "jsdom",
+    // The app talks to the real backend by default; tests run against the in-memory mocks.
+    env: { VITE_USE_MOCKS: "1" },
     setupFiles: "./src/test/setup.ts",
     css: true,
     fileParallelism: false,

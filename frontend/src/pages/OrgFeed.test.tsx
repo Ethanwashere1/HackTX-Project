@@ -1,11 +1,11 @@
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import App from "../App";
-import { api } from "../api/client";
+import { api, SEED_USERS } from "../api/client";
 
 describe("OrgFeedPage", () => {
   beforeEach(async () => {
-    await api.devLogin();
+    await api.devLogin(SEED_USERS[0]);
     window.history.pushState({}, "", "/orgs/org_ut");
   });
 

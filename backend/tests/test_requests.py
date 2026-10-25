@@ -3,7 +3,7 @@
 import pytest
 from sqlmodel import select
 
-from app.models import Group, GroupMember, OrgMember, Request, ThreadParticipant
+from app.models import Connection, Group, GroupMember, OrgMember, Request, Thread, ThreadParticipant
 from app.services.requests import excluded_for_viewer
 from tests.test_events import make_org
 from tests.test_health_errors import assert_error
@@ -127,7 +127,7 @@ def test_send_to_group_includes_all_current_members(people, db):
         inc = [r for r in member.get("/api/requests?box=incoming").json()["requests"]
                if r["status"] == "pending"]
         assert [r["request_id"] for r in inc] == [body["request_id"]]
-        assert inc[0]["target"]["group_id"] == gid and inc[0]["target"]["name"].startswith("Team ")
+        assert inc[0]["target"]["group_id"] == gid and inc[0]["target"]["name"].startswith("Squad ")
     assert dan.get("/api/requests?box=incoming").json()["requests"] == []
 
 
@@ -203,7 +203,7 @@ def test_accept_user_to_user_forms_a_group(people, db):
     assert body["group_id"].startswith("grp_") and body["connection_id"] is None
 
     group = db.get(Group, body["group_id"])
-    assert group.event_id == e and group.name.startswith("Team ") and len(group.name.split()) == 3
+    assert group.event_id == e and group.name.startswith("Squad ") and len(group.name.split()) == 3
     assert members(db, group.id) == {uid(ana), uid(ben)}
     assert group.thread_id and group.thread_id != req["thread_id"]
     assert participants(db, group.thread_id) == {uid(ana), uid(ben)}
@@ -247,22 +247,102 @@ def test_accept_informal_creates_connection(login_as, db):
     cons = ana.get(f"/api/events/{e}/connections").json()["connections"]
     assert [c["connection_id"] for c in cons] == [body["connection_id"]]
     assert cons[0]["user_id"] == uid(ben) and cons[0]["thread_id"] == req["thread_id"]
-    # Already connected: a new request is refused, and so is accepting a crossing one.
+    # The request's chat thread becomes the connection's thread; no group thread is made.
+    assert participants(db, req["thread_id"]) == {uid(ana), uid(ben)}
+    assert db.exec(select(Thread)).all() == [db.get(Thread, req["thread_id"])]
+    # Already connected: a new request either way is refused.
     assert_error(send(ana, e, uid(ben)), 409, "already_connected")
     assert_error(send(ben, e, uid(ana)), 409, "already_connected")
 
 
-def test_crossing_informal_requests_connect_once(login_as):
+@pytest.fixture
+def informal(login_as):
+    """Host plus ana, ben and cara, all joined to one informal event."""
     host = login_as("host@utexas.edu", "Hannah Host")
-    ana, ben = login_as("ana@utexas.edu", "Ana"), login_as("ben@utexas.edu", "Ben")
-    e = make_event(host, type="informal")
-    join(ana, e)
-    join(ben, e)
-    r1 = send_ok(ana, e, uid(ben))
-    r2 = send_ok(ben, e, uid(ana))
-    accept_ok(ben, r1["request_id"])
-    assert_error(ana.post(f"/api/requests/{r2['request_id']}/accept"), 409, "already_connected")
-    assert ana.get(f"/api/requests?box=incoming").json()["requests"][0]["status"] == "pending"
+    users = {n: login_as(f"{n}@utexas.edu", n.capitalize()) for n in ("ana", "ben", "cara")}
+    event_id = make_event(host, type="informal")
+    for c in users.values():
+        join(c, event_id)
+    return {"host": host, "event_id": event_id, **users}
+
+
+@pytest.mark.parametrize("accept_first", ["ana_to_ben", "ben_to_ana"])
+def test_crossing_informal_requests_connect_once(informal, db, accept_first):
+    """ana and ben request each other: accepting either one accepts both, with one connection."""
+    ana, ben, e = informal["ana"], informal["ben"], informal["event_id"]
+    r1 = send_ok(ana, e, uid(ben))["request_id"]
+    r2 = send_ok(ben, e, uid(ana))["request_id"]
+    accepted, acceptor, other, other_acceptor = (
+        (r1, ben, r2, ana) if accept_first == "ana_to_ben" else (r2, ana, r1, ben)
+    )
+    body = accept_ok(acceptor, accepted)
+    con_id = body["connection_id"]
+    assert body["status"] == "accepted" and con_id.startswith("con_") and body["group_id"] is None
+    assert_error(other_acceptor.post(f"/api/requests/{other}/accept"), 409, "request_not_pending")
+    assert_error(other_acceptor.post(f"/api/requests/{other}/decline"), 409, "request_not_pending")
+
+    for rid in (r1, r2):
+        stored = db.get(Request, rid)
+        assert (stored.status, stored.connection_id, stored.decided_by) == ("accepted", con_id, uid(acceptor))
+    assert len(db.exec(select(Connection)).all()) == 1
+    assert db.get(Connection, con_id).thread_id == db.get(Request, accepted).thread_id
+    for c, peer in ((ana, ben), (ben, ana)):
+        cons = c.get(f"/api/events/{e}/connections").json()["connections"]
+        assert [(x["connection_id"], x["user_id"]) for x in cons] == [(con_id, uid(peer))]
+        listed = [r for box in ("incoming", "outgoing")
+                  for r in c.get(f"/api/requests?box={box}&event_id={e}").json()["requests"]]
+        assert {(r["status"], r["connection_id"]) for r in listed} == {("accepted", con_id)}
+
+
+def test_crossing_resolution_leaves_other_pairs_alone(informal, db):
+    ana, ben, cara, e = informal["ana"], informal["ben"], informal["cara"], informal["event_id"]
+    r_ab = send_ok(ana, e, uid(ben))["request_id"]
+    r_ca = send_ok(cara, e, uid(ana))["request_id"]
+    r_ac = send_ok(ana, e, uid(cara))["request_id"]
+    r_bc = send_ok(ben, e, uid(cara))["request_id"]
+    accept_ok(ben, r_ab)
+    assert {rid: db.get(Request, rid).status for rid in (r_ca, r_ac, r_bc)} == dict.fromkeys(
+        (r_ca, r_ac, r_bc), "pending"
+    )
+    # A declined crossing request stays declined when the other direction is accepted.
+    assert ana.post(f"/api/requests/{r_ca}/decline").status_code == 200
+    con_id = accept_ok(cara, r_ac)["connection_id"]
+    assert db.get(Request, r_ca).status == "declined" and db.get(Request, r_ca).connection_id is None
+    assert db.get(Request, r_bc).status == "pending"
+    assert {c["user_id"] for c in ana.get(f"/api/events/{e}/connections").json()["connections"]} == {
+        uid(ben), uid(cara)
+    }
+    assert con_id in {c["connection_id"] for c in cara.get(f"/api/events/{e}/connections").json()["connections"]}
+
+
+def test_accept_after_pair_already_connected_reuses_the_connection(informal, db):
+    """A request that slipped in while another accept was committing resolves to the same connection."""
+    ana, ben, e = informal["ana"], informal["ben"], informal["event_id"]
+    con_id = accept_ok(ben, send_ok(ana, e, uid(ben))["request_id"])["connection_id"]
+    late = Request(event_id=e, sender_id=uid(ben), target_type="user", target_user_id=uid(ana))
+    db.add(late)
+    db.commit()
+    body = accept_ok(ana, late.id)
+    assert body == {"request_id": late.id, "status": "accepted", "group_id": None, "connection_id": con_id}
+    assert len(db.exec(select(Connection)).all()) == 1
+
+
+def test_informal_decline_and_cancel_make_no_connection(informal, db):
+    ana, ben, cara, e = informal["ana"], informal["ben"], informal["cara"], informal["event_id"]
+    r1 = send_ok(ana, e, uid(ben))["request_id"]
+    r2 = send_ok(ana, e, uid(cara))["request_id"]
+    assert ben.post(f"/api/requests/{r1}/decline").json()["connection_id"] is None
+    assert ana.post(f"/api/requests/{r2}/cancel").json()["connection_id"] is None
+    assert db.exec(select(Connection)).all() == []
+    assert ana.get(f"/api/events/{e}/connections").json() == {"connections": []}
+    # Declined pairs are not recommended to each other.
+    assert uid(ben) in excluded_for_viewer(db, e, uid(ana)).user_ids
+
+
+def test_informal_group_target_rejected_even_for_a_real_group(people, informal):
+    """A group id from a structured event can't be targeted from an informal one."""
+    gid = form_group(people["ana"], people["ben"], people["event_id"])
+    assert_error(send(informal["ana"], informal["event_id"], gid, "group"), 422, "validation_error")
 
 
 def test_who_can_accept(people):
@@ -405,6 +485,124 @@ def test_leaving_frees_the_slot(people):
     assert_error(ana.post(f"/api/requests/{rid}/accept"), 409, "group_limit_per_user")
     assert ana.post(f"/api/groups/{gid}/leave").status_code == 204
     assert accept_ok(ana, rid)["group_id"] != gid
+
+
+# --- crossing requests in structured events ------------------------------------------------------
+
+def pair_event(login_as, max_groups_per_user: int):
+    """Host plus ana, ben, cara and dan, all joined to one structured event."""
+    host = login_as("host@utexas.edu", "Hannah Host")
+    users = [login_as(f"{n}@utexas.edu", n.capitalize()) for n in ("ana", "ben", "cara", "dan")]
+    e = make_event(host, max_groups_per_user=max_groups_per_user)
+    for c in users:
+        join(c, e)
+    return (*users, e)
+
+
+def assert_settled(db, request_ids, group_id, decided_by) -> None:
+    db.expire_all()
+    for rid in request_ids:
+        stored = db.get(Request, rid)
+        assert (stored.status, stored.group_id, stored.decided_by) == ("accepted", group_id, decided_by)
+
+
+@pytest.mark.parametrize("limit", [1, 2])
+@pytest.mark.parametrize("accept_first", ["ana_to_ben", "ben_to_ana"])
+def test_crossing_structured_requests_form_one_group(login_as, db, limit, accept_first):
+    """ana and ben request each other: accepting either one accepts both, with one group."""
+    ana, ben, _, _, e = pair_event(login_as, limit)
+    r1 = send_ok(ana, e, uid(ben))["request_id"]
+    r2 = send_ok(ben, e, uid(ana))["request_id"]
+    accepted, acceptor, other, other_acceptor = (
+        (r1, ben, r2, ana) if accept_first == "ana_to_ben" else (r2, ana, r1, ben)
+    )
+    gid = accept_ok(acceptor, accepted)["group_id"]
+    assert_error(other_acceptor.post(f"/api/requests/{other}/accept"), 409, "request_not_pending")
+    assert_error(other_acceptor.post(f"/api/requests/{other}/decline"), 409, "request_not_pending")
+
+    assert_settled(db, [r1, r2], gid, uid(acceptor))
+    assert [g.id for g in db.exec(select(Group)).all()] == [gid]
+    assert members(db, gid) == {uid(ana), uid(ben)}
+    for c in (ana, ben):
+        listed = [r for box in ("incoming", "outgoing")
+                  for r in c.get(f"/api/requests?box={box}&event_id={e}").json()["requests"]]
+        assert {(r["status"], r["group_id"]) for r in listed} == {("accepted", gid)}
+        assert c.get(f"/api/events/{e}").json()["my_membership"]["group_id"] == gid
+
+
+def test_structured_crossing_leaves_other_pairs_alone(login_as, db):
+    ana, ben, cara, dan, e = pair_event(login_as, 2)
+    r_ab = send_ok(ana, e, uid(ben))["request_id"]
+    r_ba = send_ok(ben, e, uid(ana))["request_id"]
+    r_ca = send_ok(cara, e, uid(ana))["request_id"]
+    r_ac = send_ok(ana, e, uid(cara))["request_id"]
+    r_bc = send_ok(ben, e, uid(cara))["request_id"]
+    r_dc = send_ok(dan, e, uid(cara))["request_id"]
+    g1 = accept_ok(ben, r_ab)["group_id"]
+    assert_settled(db, [r_ab, r_ba], g1, uid(ben))
+    untouched = (r_ca, r_ac, r_bc, r_dc)
+    assert {rid: db.get(Request, rid).status for rid in untouched} == dict.fromkeys(untouched, "pending")
+    # A declined crossing request stays declined when the other direction is accepted.
+    assert ana.post(f"/api/requests/{r_ca}/decline").status_code == 200
+    g2 = accept_ok(cara, r_ac)["group_id"]
+    assert g2 != g1 and members(db, g2) == {uid(ana), uid(cara)}
+    db.expire_all()
+    assert db.get(Request, r_ca).status == "declined" and db.get(Request, r_ca).group_id is None
+    assert db.get(Request, r_bc).status == "pending" and db.get(Request, r_dc).status == "pending"
+
+
+def test_joining_a_group_settles_requests_with_its_members(login_as, db):
+    """cara joins ana and ben's group: her pending requests with them are accepted with that group;
+    requests with people outside the group stay pending."""
+    ana, ben, cara, dan, e = pair_event(login_as, 2)
+    gid = form_group(ana, ben, e)
+    r_join = send_ok(cara, e, gid, "group")["request_id"]
+    r_ac = send_ok(ana, e, uid(cara))["request_id"]
+    r_cb = send_ok(cara, e, uid(ben))["request_id"]
+    r_dc = send_ok(dan, e, uid(cara))["request_id"]
+    r_da = send_ok(dan, e, uid(ana))["request_id"]
+    assert accept_ok(ben, r_join)["group_id"] == gid
+    assert_settled(db, [r_join, r_ac, r_cb], gid, uid(ben))
+    assert db.get(Request, r_dc).status == "pending" and db.get(Request, r_da).status == "pending"
+    assert members(db, gid) == {uid(ana), uid(ben), uid(cara)}
+    assert len(db.exec(select(Group)).all()) == 1
+
+
+def test_request_to_a_group_mate_is_refused(login_as):
+    ana, ben, cara, _, e = pair_event(login_as, 2)
+    form_group(ana, ben, e)
+    assert_error(send(ana, e, uid(ben)), 409, "already_in_group")
+    assert_error(send(ben, e, uid(ana)), 409, "already_in_group")
+    send_ok(ana, e, uid(cara))  # not group-mates: fine
+
+
+@pytest.mark.parametrize("limit", [1, 2])
+def test_accept_between_group_mates_reuses_the_group(login_as, db, limit):
+    """A request that slipped in while the pair's group formed resolves to that group."""
+    ana, ben, _, _, e = pair_event(login_as, limit)
+    gid = form_group(ana, ben, e)
+    late = Request(event_id=e, sender_id=uid(ben), target_type="user", target_user_id=uid(ana))
+    db.add(late)
+    db.commit()
+    body = accept_ok(ana, late.id)
+    assert body == {"request_id": late.id, "status": "accepted", "group_id": gid, "connection_id": None}
+    assert [g.id for g in db.exec(select(Group)).all()] == [gid]
+    assert members(db, gid) == {uid(ana), uid(ben)}
+
+
+def test_late_request_after_a_leave_forms_a_new_group(login_as, db):
+    """The pair no longer shares a group, so the late request forms one as usual."""
+    ana, ben, _, _, e = pair_event(login_as, 1)
+    gid = form_group(ana, ben, e)
+    late = Request(event_id=e, sender_id=uid(ben), target_type="user", target_user_id=uid(ana))
+    db.add(late)
+    db.commit()
+    assert ana.post(f"/api/groups/{gid}/leave").status_code == 204
+    # ben is still in gid, so a new group would put him over his limit of 1.
+    assert_error(ana.post(f"/api/requests/{late.id}/accept"), 409, "group_limit_per_user")
+    assert ben.post(f"/api/groups/{gid}/leave").status_code == 204
+    new_gid = accept_ok(ana, late.id)["group_id"]
+    assert new_gid != gid and members(db, new_gid) == {uid(ana), uid(ben)}
 
 
 # --- exclusions for recommendations --------------------------------------------------------------

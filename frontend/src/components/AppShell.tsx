@@ -1,20 +1,20 @@
 import { useEffect, useState } from "react";
 import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
+import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { Avatar } from "./Avatar";
 import "./AppShell.css";
 
-const nav = [
-  { to: "/orgs/org_ut", label: "Discover", short: "Home", end: true },
-  { to: "/events/evt_hacktx", label: "My events", short: "Events" },
-  { to: "/groups/grp_pixel", label: "My squads", short: "Squads" },
-  { to: "/requests", label: "Requests", short: "Inbox", badge: 2 },
-  { to: "/threads/thr_1", label: "Messages", short: "Chat" },
-];
+function orgMono(name: string) {
+  const words = name.split(/\s+/).filter(Boolean);
+  const caps = name.replace(/[^A-Z]/g, "");
+  return (caps.length >= 2 ? caps : words.map((w) => w[0]).join("")).slice(0, 2).toUpperCase();
+}
 
 export function AppShell() {
   const { me, logout } = useAuth();
   const location = useLocation();
+  const [pendingIncoming, setPendingIncoming] = useState(0);
   const [menuOpen, setMenuOpen] = useState(false);
   const onOrgFeed = /^\/orgs\/[^/]+$/.test(location.pathname) && !location.pathname.endsWith("/new");
 
@@ -28,6 +28,67 @@ export function AppShell() {
       document.body.style.overflow = "";
     };
   }, [menuOpen]);
+
+  // Refresh the Requests badge on every navigation (there is no push channel).
+  useEffect(() => {
+    let live = true;
+    api
+      .listRequests("incoming")
+      .then((items) => {
+        if (live) setPendingIncoming(items.filter((r) => r.status === "pending").length);
+      })
+      .catch(() => {
+        /* the badge is best-effort */
+      });
+    return () => {
+      live = false;
+    };
+  }, [location.pathname]);
+
+  const orgs = me?.orgs ?? [];
+  const primary = orgs[0] ?? null;
+
+  // Without an approved org, Discover opens the first org the user can see (its feed page shows a
+  // join panel) instead of duplicating the Organizations link.
+  const [discoverOrgId, setDiscoverOrgId] = useState<string | null>(null);
+  useEffect(() => {
+    if (primary) return;
+    let live = true;
+    api
+      .listOrgs()
+      .then((list) => {
+        const pick = list.find((o) => o.my_status === "pending") ?? list[0];
+        if (live && pick) setDiscoverOrgId(pick.org_id);
+      })
+      .catch(() => {
+        /* fall back to /orgs */
+      });
+    return () => {
+      live = false;
+    };
+  }, [primary]);
+
+  const home = primary
+    ? `/orgs/${primary.org_id}`
+    : discoverOrgId
+      ? `/orgs/${discoverOrgId}`
+      : "/orgs";
+  // No "my events", "my squads" or "messages" list exists in the API yet, so the nav links to the
+  // org feed (with a joined filter) and the requests inbox, which links to chats and squads.
+  const nav = [
+    { to: home, label: "Discover", short: "Home", end: true },
+    ...(primary ? [{ to: `${home}?joined=1`, label: "My events", short: "Events", end: true }] : []),
+    { to: "/requests", label: "Requests", short: "Inbox", badge: pendingIncoming },
+    { to: "/orgs", label: "Organizations", short: "Orgs", end: true },
+  ];
+
+  // NavLink ignores the query string, so tell Discover and My events apart here.
+  const isNavActive = (label: string, isActive: boolean) => {
+    const joinedView = new URLSearchParams(location.search).get("joined") === "1";
+    return (
+      isActive && (label === "My events" ? joinedView : label === "Discover" ? !joinedView : true)
+    );
+  };
 
   return (
     <div className={`shell${menuOpen ? " is-menu-open" : ""}`}>
@@ -56,21 +117,21 @@ export function AppShell() {
 
         {/* Context chip only — not a second "active" nav twin of Discover */}
         <div className="shell-org" aria-label="Current organization">
-          <span className="shell-org-mono">UT</span>
+          <span className="shell-org-mono">{primary ? orgMono(primary.name) : "+"}</span>
           <span className="shell-org-copy">
-            <strong>UT Austin</strong>
-            <small>Campus community</small>
+            <strong>{primary?.name ?? "Find an organization"}</strong>
+            <small>{primary ? "Campus community" : "Join or create one"}</small>
           </span>
         </div>
 
         <nav className="shell-nav" aria-label="Main">
           {nav.map((item) => (
             <NavLink
-              key={item.to}
+              key={item.label}
               to={item.to}
               end={item.end}
               className={({ isActive }) =>
-                `shell-nav-link${isActive ? " is-active" : ""}`
+                `shell-nav-link${isNavActive(item.label, isActive) ? " is-active" : ""}`
               }
             >
               <span>{item.label}</span>
@@ -82,17 +143,20 @@ export function AppShell() {
         <div className="shell-spaces">
           <p>Your spaces</p>
           {/* Plain Link — avoids a second aria-current / active twin of Discover */}
-          <Link
-            to="/orgs/org_ut"
-            className={`shell-space-link${onOrgFeed ? " is-current-space" : ""}`}
-          >
-            UT Austin
-          </Link>
+          {orgs.map((o) => (
+            <Link
+              key={o.org_id}
+              to={`/orgs/${o.org_id}`}
+              className={`shell-space-link${
+                onOrgFeed && location.pathname === `/orgs/${o.org_id}` ? " is-current-space" : ""
+              }`}
+            >
+              {o.name}
+            </Link>
+          ))}
           <NavLink
             to="/orgs/new"
-            className={({ isActive }) =>
-              `shell-space-link${isActive ? " is-current-space" : ""}`
-            }
+            className={({ isActive }) => `shell-space-link${isActive ? " is-current-space" : ""}`}
           >
             + Create organization
           </NavLink>
@@ -146,11 +210,11 @@ export function AppShell() {
       <nav className="shell-bottom" aria-label="Mobile">
         {nav.slice(0, 4).map((item) => (
           <NavLink
-            key={item.to}
+            key={item.label}
             to={item.to}
             end={item.end}
             className={({ isActive }) =>
-              `shell-bottom-link${isActive ? " is-active" : ""}`
+              `shell-bottom-link${isNavActive(item.label, isActive) ? " is-active" : ""}`
             }
           >
             <span>{item.short}</span>

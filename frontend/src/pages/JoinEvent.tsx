@@ -1,25 +1,61 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api/client";
-import type { EventDetail } from "../api/types";
+import { ApiError, errorMessage } from "../api/errors";
+import type { AnswerValue, Contact, ContactKind, EventDetail, FieldValue, Question } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
 
+const SOCIAL_KINDS: { kind: ContactKind; label: string; placeholder: string }[] = [
+  { kind: "github", label: "GitHub", placeholder: "username" },
+  { kind: "linkedin", label: "LinkedIn", placeholder: "linkedin.com/in/…" },
+  { kind: "instagram", label: "Instagram", placeholder: "@handle" },
+];
+
+function humanize(key: string) {
+  const s = key.replace(/_/g, " ");
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+/** The answer value the contract expects for the question kind, or null if unanswered. */
+function answerValue(q: Question, raw: string | string[] | undefined): AnswerValue | null {
+  if (raw === undefined) return null;
+  if (q.kind === "multi_choice") return Array.isArray(raw) && raw.length ? raw : null;
+  const text = (Array.isArray(raw) ? raw.join(", ") : raw).trim();
+  if (!text) return null;
+  if (q.kind === "number") {
+    const n = Number(text);
+    return Number.isFinite(n) ? n : null;
+  }
+  return text;
+}
+
+/** A field with commas becomes a list of strings ("react, figma"), otherwise a string. */
+function fieldValue(raw: string): FieldValue | null {
+  const text = raw.trim();
+  if (!text) return null;
+  if (text.includes(",")) {
+    const list = text.split(",").map((s) => s.trim()).filter(Boolean);
+    return list.length ? list : null;
+  }
+  return text;
+}
+
 export function JoinEventPage() {
-  const { eventId = "evt_hacktx" } = useParams();
+  const { eventId = "" } = useParams();
   const navigate = useNavigate();
   const { me } = useAuth();
   const [event, setEvent] = useState<EventDetail | null>(null);
-  const [answers, setAnswers] = useState<Record<string, string>>({});
-  const [skills, setSkills] = useState("react, figma");
-  const [experience, setExperience] = useState("intermediate");
-  const [subjects, setSubjects] = useState("discrete math");
-  const [github, setGithub] = useState("mayachen");
-  const [instagram, setInstagram] = useState("@maya.builds");
+  const [answers, setAnswers] = useState<Record<string, string | string[]>>({});
+  const [fields, setFields] = useState<Record<string, string>>({});
+  const [socials, setSocials] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    void api.getEvent(eventId).then(setEvent).catch((e: Error) => setError(e.message));
+    api
+      .getEvent(eventId)
+      .then(setEvent)
+      .catch((e: unknown) => setError(errorMessage(e)));
   }, [eventId]);
 
   async function onSubmit(e: FormEvent) {
@@ -28,28 +64,32 @@ export function JoinEventPage() {
     setBusy(true);
     setError(null);
     try {
-      const fields =
-        event.type === "structured"
-          ? {
-              skills: skills.split(",").map((s) => s.trim()).filter(Boolean),
-              experience_level: experience,
-            }
-          : { subjects };
+      const answerList = event.questions.flatMap((q) => {
+        const value = answerValue(q, answers[q.question_id]);
+        return value === null ? [] : [{ question_id: q.question_id, value }];
+      });
+      const fieldMap: Record<string, FieldValue> = {};
+      for (const key of event.required_fields) {
+        const value = fieldValue(fields[key] ?? "");
+        if (value !== null) fieldMap[key] = value;
+      }
+      const socialList: Contact[] = SOCIAL_KINDS.flatMap(({ kind }) => {
+        const value = (socials[kind] ?? "").trim();
+        return value ? [{ kind, value }] : [];
+      });
       const res = await api.joinEvent(eventId, {
-        answers: event.questions.map((q) => ({
-          question_id: q.question_id,
-          value: answers[q.question_id] ?? "",
-        })),
-        fields,
-        socials: [
-          { kind: "github", value: github },
-          { kind: "instagram", value: instagram },
-        ],
+        answers: answerList,
+        fields: fieldMap,
+        socials: socialList,
       });
       if (res.interview.available) navigate(`/events/${eventId}/interview`);
       else navigate(`/events/${eventId}/recommendations`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Join failed");
+      if (err instanceof ApiError && err.code === "already_joined") {
+        navigate(`/events/${eventId}`);
+        return;
+      }
+      setError(errorMessage(err, "Join failed"));
     } finally {
       setBusy(false);
     }
@@ -73,6 +113,19 @@ export function JoinEventPage() {
     );
   }
 
+  if (event.my_membership) {
+    return (
+      <div className="su-page su-fade-up">
+        <h1 className="su-page-title">You're in {event.name}</h1>
+        <Link className="su-btn su-btn-primary" to={`/events/${event.event_id}/recommendations`}>
+          See recommendations
+        </Link>
+      </div>
+    );
+  }
+
+  const setAnswer = (id: string, v: string | string[]) => setAnswers({ ...answers, [id]: v });
+
   return (
     <div className="su-page su-fade-up">
       <h1 className="su-page-title">Join {event.name}</h1>
@@ -93,8 +146,8 @@ export function JoinEventPage() {
                 id={q.question_id}
                 className="su-select"
                 required={q.required}
-                value={answers[q.question_id] ?? ""}
-                onChange={(e) => setAnswers({ ...answers, [q.question_id]: e.target.value })}
+                value={(answers[q.question_id] as string | undefined) ?? ""}
+                onChange={(e) => setAnswer(q.question_id, e.target.value)}
               >
                 <option value="">Select…</option>
                 {q.options.map((o) => (
@@ -103,53 +156,74 @@ export function JoinEventPage() {
                   </option>
                 ))}
               </select>
+            ) : q.kind === "multi_choice" && q.options ? (
+              <div id={q.question_id} style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
+                {q.options.map((o) => {
+                  const picked = (answers[q.question_id] as string[] | undefined) ?? [];
+                  return (
+                    <label key={o} style={{ display: "flex", gap: "0.35rem", alignItems: "center" }}>
+                      <input
+                        type="checkbox"
+                        checked={picked.includes(o)}
+                        onChange={(e) =>
+                          setAnswer(
+                            q.question_id,
+                            e.target.checked ? [...picked, o] : picked.filter((x) => x !== o),
+                          )
+                        }
+                      />
+                      {o}
+                    </label>
+                  );
+                })}
+              </div>
             ) : (
               <input
                 id={q.question_id}
                 className="su-input"
+                type={q.kind === "number" ? "number" : "text"}
+                maxLength={q.kind === "text" ? 2000 : undefined}
                 required={q.required}
-                value={answers[q.question_id] ?? ""}
-                onChange={(e) => setAnswers({ ...answers, [q.question_id]: e.target.value })}
+                value={(answers[q.question_id] as string | undefined) ?? ""}
+                onChange={(e) => setAnswer(q.question_id, e.target.value)}
               />
             )}
           </div>
         ))}
 
-        {event.type === "structured" ? (
-          <>
-            <div className="su-field">
-              <label className="su-label">Skills</label>
-              <input className="su-input" value={skills} onChange={(e) => setSkills(e.target.value)} />
-            </div>
-            <div className="su-field">
-              <label className="su-label">Experience level</label>
-              <input
-                className="su-input"
-                value={experience}
-                onChange={(e) => setExperience(e.target.value)}
-              />
-            </div>
-          </>
-        ) : (
-          <div className="su-field">
-            <label className="su-label">Subjects</label>
-            <input className="su-input" value={subjects} onChange={(e) => setSubjects(e.target.value)} />
-          </div>
-        )}
-
-        <div className="su-grid-2">
-          <div className="su-field">
-            <label className="su-label">GitHub</label>
-            <input className="su-input" value={github} onChange={(e) => setGithub(e.target.value)} />
-          </div>
-          <div className="su-field">
-            <label className="su-label">Instagram</label>
+        {event.required_fields.map((key) => (
+          <div className="su-field" key={key}>
+            <label className="su-label" htmlFor={`field-${key}`}>
+              {humanize(key)} *
+            </label>
             <input
+              id={`field-${key}`}
               className="su-input"
-              value={instagram}
-              onChange={(e) => setInstagram(e.target.value)}
+              required
+              maxLength={500}
+              placeholder="Separate several with commas"
+              value={fields[key] ?? ""}
+              onChange={(e) => setFields({ ...fields, [key]: e.target.value })}
             />
           </div>
+        ))}
+
+        <div className="su-grid-2">
+          {SOCIAL_KINDS.map((s) => (
+            <div className="su-field" key={s.kind}>
+              <label className="su-label" htmlFor={`social-${s.kind}`}>
+                {s.label} (optional)
+              </label>
+              <input
+                id={`social-${s.kind}`}
+                className="su-input"
+                maxLength={300}
+                placeholder={s.placeholder}
+                value={socials[s.kind] ?? ""}
+                onChange={(e) => setSocials({ ...socials, [s.kind]: e.target.value })}
+              />
+            </div>
+          ))}
         </div>
 
         {error ? <p style={{ color: "var(--su-danger)" }}>{error}</p> : null}

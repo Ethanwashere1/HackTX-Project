@@ -6,12 +6,15 @@ this order: the event row (group_count, and it serializes accepts within the eve
 group row (max_size), both users' event_members rows in id order (max_groups_per_user), then the
 request row. Limits are re-checked only after the locks are held. Leaving a group locks the group
 row first too, and decline/cancel lock only the request row, so the lock order never inverts.
+For a structured user -> user accept, the group slot holds the group the pair already shares, if any.
+Every accept also locks, last, the other pending requests it settles, to accept them with it: the
+pair's crossing request, and in structured events any request between people now in the group.
 """
 
 from dataclasses import dataclass, field
 
 from sqlalchemy.exc import IntegrityError
-from sqlmodel import Session, func, or_, select
+from sqlmodel import Session, and_, func, or_, select
 
 from app.errors import AppError
 from app.models import Connection, Event, EventMember, Group, GroupMember, Request, User
@@ -42,6 +45,17 @@ def _connection_between(db: Session, event_id: str, u1: str, u2: str) -> Connect
     ).first()
 
 
+def _shared_group_id(db: Session, event_id: str, u1: str, u2: str) -> str | None:
+    """A group in the event that both users are in, if any."""
+    return db.exec(
+        select(GroupMember.group_id)
+        .where(GroupMember.event_id == event_id, GroupMember.user_id.in_([u1, u2]))
+        .group_by(GroupMember.group_id)
+        .having(func.count(func.distinct(GroupMember.user_id)) == 2)
+        .order_by(GroupMember.group_id)
+    ).first()
+
+
 # --- send ----------------------------------------------------------------------------------------
 
 def create_request(
@@ -59,6 +73,8 @@ def create_request(
             raise AppError(404, "not_found", "User not found in this event")
         if event.type == "informal" and _connection_between(db, event.id, user.id, target_id):
             raise AppError(409, "already_connected", "You're already connected")
+        if event.type == "structured" and _shared_group_id(db, event.id, user.id, target_id):
+            raise AppError(409, "already_in_group", "You're already in a group together")
         participants = [user.id, target_id]
     else:
         if event.type == "informal":
@@ -125,6 +141,13 @@ def list_requests(db: Session, user: User, *, box: str, event_id: str | None) ->
             target = {"user_id": r.target_user_id, "name": names.get(r.target_user_id)}
         else:
             target = {"group_id": r.target_group_id, "name": group_names.get(r.target_group_id)}
+        # The other side from the viewer's point of view: the target (user or group) for an
+        # outgoing request, the sender for an incoming one.
+        if box == "outgoing":
+            other = {"type": r.target_type, "id": r.target_user_id or r.target_group_id,
+                     "name": target["name"]}
+        else:
+            other = {"type": "user", "id": r.sender_id, "name": names.get(r.sender_id)}
         out.append(
             {
                 "request_id": r.id,
@@ -132,6 +155,8 @@ def list_requests(db: Session, user: User, *, box: str, event_id: str | None) ->
                 "sender": {"user_id": r.sender_id, "name": names.get(r.sender_id)},
                 "target_type": r.target_type,
                 "target": target,
+                "direction": box,
+                "other_party": other,
                 "message": r.message,
                 "status": r.status,
                 "thread_id": r.thread_id,
@@ -204,6 +229,12 @@ def _accept_locked(db: Session, req: Request, user: User) -> Request:
         group = _locked(db, select(Group).where(Group.id == req.target_group_id))
         if group is None:
             raise AppError(404, "not_found", "Group not found")
+    elif event.type == "structured":
+        # The pair may already be group-mates (a request sent while another accept committed).
+        # Only accepts add members and they wait on the event lock, so this can only shrink later.
+        shared = _shared_group_id(db, event.id, req.sender_id, req.target_user_id)
+        if shared:
+            group = _locked(db, select(Group).where(Group.id == shared))
     other = req.target_user_id or user.id
     db.exec(
         select(EventMember.id)
@@ -220,11 +251,17 @@ def _accept_locked(db: Session, req: Request, user: User) -> Request:
         raise AppError(403, "forbidden", "Only the recipient can accept this request")
 
     if event.type == "informal":
-        _connect(db, event, req)
-    elif group is None:
-        _form_group(db, event, req)
-    else:
+        _connect(db, event, req, user)
+    elif req.target_type == "group":
         _join_group(db, event, group, req)
+        _settle_pending(db, event, group, [req.sender_id], req, user)
+    else:
+        pair = [req.sender_id, req.target_user_id]
+        if group is None or set(pair) - set(group_member_ids(db, group.id)):
+            group = _form_group(db, event, req)  # no shared group, or one of them left it meanwhile
+        else:
+            req.group_id = group.id
+        _settle_pending(db, event, group, pair, req, user)
     _decide(req, user, "accepted")
     db.add(req)
     db.flush()
@@ -245,7 +282,7 @@ def _add_member(db: Session, group: Group, user_id: str) -> None:
         add_participants(db, group.thread_id, [user_id])
 
 
-def _form_group(db: Session, event: Event, req: Request) -> None:
+def _form_group(db: Session, event: Event, req: Request) -> Group:
     groups_formed = db.exec(
         select(func.count()).select_from(Group).where(Group.event_id == event.id)
     ).one()
@@ -262,6 +299,7 @@ def _form_group(db: Session, event: Event, req: Request) -> None:
     for uid in (req.sender_id, req.target_user_id):
         _add_member(db, group, uid)
     req.group_id = group.id
+    return group
 
 
 def _join_group(db: Session, event: Event, group: Group, req: Request) -> None:
@@ -284,14 +322,65 @@ def _join_group(db: Session, event: Event, group: Group, req: Request) -> None:
     req.group_id = group.id
 
 
-def _connect(db: Session, event: Event, req: Request) -> None:
-    if _connection_between(db, event.id, req.sender_id, req.target_user_id):
-        raise AppError(409, "already_connected", "You're already connected")
-    a, b = sorted((req.sender_id, req.target_user_id))
-    con = Connection(event_id=event.id, user_a_id=a, user_b_id=b, thread_id=req.thread_id)
-    db.add(con)
-    db.flush()
+def _settle_pending(
+    db: Session, event: Event, group: Group, newcomers: list[str], req: Request, user: User
+) -> None:
+    """Accept, with `group`, the other pending requests this accept made moot: any user request
+    between a newcomer and someone now in the group (the pair's crossing request, or one between a
+    new member and an existing one), and any newcomer's own request to the group. Both people are
+    group-mates already, so accepting one of these later would only form a second group with the
+    same people or fail on max_groups_per_user."""
+    mates = set(group_member_ids(db, group.id)) | set(newcomers)
+    for other in db.exec(
+        select(Request)
+        .where(
+            Request.event_id == event.id,
+            Request.status == "pending",
+            Request.id != req.id,
+            or_(
+                and_(Request.sender_id.in_(newcomers), Request.target_user_id.in_(mates)),
+                and_(Request.sender_id.in_(mates), Request.target_user_id.in_(newcomers)),
+                and_(Request.sender_id.in_(newcomers), Request.target_group_id == group.id),
+            ),
+        )
+        .order_by(Request.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).all():
+        _decide(other, user, "accepted")
+        other.group_id = group.id
+        db.add(other)
+
+
+def _connect(db: Session, event: Event, req: Request, user: User) -> None:
+    """Connect the pair once. Both users have consented, so any other pending request between them
+    (the crossing one they sent each other) is accepted with the same connection. If a connection
+    already exists (a request sent while another accept was committing), it is reused."""
+    con = _connection_between(db, event.id, req.sender_id, req.target_user_id)
+    if con is None:
+        a, b = sorted((req.sender_id, req.target_user_id))
+        con = Connection(event_id=event.id, user_a_id=a, user_b_id=b, thread_id=req.thread_id)
+        db.add(con)
+        db.flush()
     req.connection_id = con.id
+    pair = (req.sender_id, req.target_user_id)
+    for other in db.exec(
+        select(Request)
+        .where(
+            Request.event_id == event.id,
+            Request.status == "pending",
+            Request.id != req.id,
+            Request.sender_id.in_(pair),
+            Request.target_user_id.in_(pair),
+            Request.sender_id != Request.target_user_id,
+        )
+        .order_by(Request.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).all():
+        _decide(other, user, "accepted")
+        other.connection_id = con.id
+        db.add(other)
 
 
 def decline_request(db: Session, request_id: str, user: User) -> Request:

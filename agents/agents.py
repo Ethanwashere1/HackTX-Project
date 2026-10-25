@@ -1,8 +1,10 @@
 import json
+import logging
 import os
 from pathlib import Path
 from dotenv import load_dotenv
 from google import genai
+from google.genai import errors as genai_errors
 from google.genai import types
 from pydantic import BaseModel, Field
 
@@ -46,9 +48,31 @@ def get_client() -> genai.Client:
 
 
 MODEL_ID = env_value("GEMINI_MODEL", "gemini-3.8-flash")
+# Tried in order when a model is overloaded, rate limited or times out (comma-separated).
+FALLBACK_MODEL_IDS = [
+    m.strip()
+    for m in (env_value("GEMINI_FALLBACK_MODELS", "gemini-3.5-flash,gemini-3-flash-preview,gemini-flash-lite-latest") or "").split(",")
+    if m.strip()
+]
 # Audio-native Live model served on the Gemini API (API key); see google-genai's live tests.
 LIVE_MODEL_ID = env_value("GEMINI_LIVE_MODEL", "gemini-3.1-flash-live-preview")
 FAST_THINKING = types.ThinkingConfig(thinking_budget=0)
+# Statuses where another model is likely to answer: overloaded, rate limited, internal error, timeout.
+FALLBACK_STATUSES = {429, 500, 503, 504}
+
+log = logging.getLogger("squadup.agents")
+
+
+def generate(contents, config: types.GenerateContentConfig):
+    """generate_content on MODEL_ID, moving to the next fallback model while Gemini is overloaded."""
+    models = [MODEL_ID, *(m for m in FALLBACK_MODEL_IDS if m != MODEL_ID)]
+    for i, model in enumerate(models):
+        try:
+            return get_client().models.generate_content(model=model, contents=contents, config=config)
+        except genai_errors.APIError as e:
+            if e.code not in FALLBACK_STATUSES or i == len(models) - 1:
+                raise
+            log.warning("Gemini %s returned %s; trying %s", model, e.code, models[i + 1])
 
 
 # =========================================================
@@ -104,8 +128,7 @@ def build_interviewer_instruction(event_config: dict | None, voice: bool = False
 def run_gemini_interviewer(conversation_history: list[dict], event_config: dict | None = None) -> dict:
     """Conducts the interview conversation turn-by-turn."""
     transcript = "\n".join([f"{msg.get('role', 'user').upper()}: {msg.get('text', '')}" for msg in conversation_history])
-    response = get_client().models.generate_content(
-        model=MODEL_ID,
+    response = generate(
         contents=f"Conversation so far:\n{transcript}",
         config=types.GenerateContentConfig(
             system_instruction=build_interviewer_instruction(event_config),
@@ -135,14 +158,30 @@ class QuizGenError(RuntimeError):
     """Gemini failed or returned unusable questionnaire questions."""
 
 
+class TraitPair(BaseModel):
+    key: str = Field(description="Short snake_case trait name.")
+    value: str = Field(description="Short trait value.")
+
+
+# Fixed keys, not dict[str, str]: a free-form map becomes `additionalProperties` in the
+# response schema, which the Gemini Developer API rejects. Flattened to a dict afterwards.
+class OverviewTraits(BaseModel):
+    working_style: str | None = Field(default=None, description="e.g. pairing, async, leader.")
+    ambition: str | None = Field(default=None, description="e.g. win, learn, have fun.")
+    availability: str | None = Field(default=None, description="e.g. all weekend, evenings.")
+    topics: str | None = Field(default=None, description="Comma-separated lowercase interests/skills.")
+    group_need: str | None = Field(default=None, description="What kind of people or group they want.")
+    other: list[TraitPair] = Field(default_factory=list, description="Any other short string traits.")
+
+    def as_dict(self) -> dict[str, str | None]:
+        flat: dict[str, str | None] = {p.key: p.value for p in self.other}
+        flat.update({k: v for k, v in self.model_dump(exclude={"other"}).items() if v is not None})
+        return flat
+
+
 class ProfileOverviewResponse(BaseModel):
     overview: str = Field(description="2-3 sentence profile overview for recommendations and the profile page.")
-    traits: dict[str, str] = Field(
-        description=(
-            "Merged trait map: working_style, ambition, availability, topics (comma-separated), "
-            "group_need, and any other short string traits."
-        )
-    )
+    traits: OverviewTraits = Field(description="Merged traits from interview, answers, fields and social notes.")
 
 
 def _clean_traits(raw: dict | None) -> dict[str, str]:
@@ -162,8 +201,7 @@ def run_gemini_profiler(transcript: str) -> dict:
     """Turns an interview transcript into a structured profile summary and traits."""
     prompt = f"Analyze this candidate interview transcript and extract a professional summary and key traits:\n\n{transcript}"
 
-    response = get_client().models.generate_content(
-        model=MODEL_ID,
+    response = generate(
         contents=prompt,
         config=types.GenerateContentConfig(
             system_instruction=(
@@ -191,8 +229,7 @@ def run_profile_overview_agent(payload: dict) -> dict:
         f"{json.dumps(payload, ensure_ascii=False)}"
     )
     try:
-        response = get_client().models.generate_content(
-            model=MODEL_ID,
+        response = generate(
             contents=prompt,
             config=types.GenerateContentConfig(
                 system_instruction=(
@@ -218,7 +255,7 @@ def run_profile_overview_agent(payload: dict) -> dict:
     overview = parsed.overview.strip()
     if not overview:
         raise OverviewError("Overview returned empty text.")
-    traits = _clean_traits(parsed.traits)
+    traits = _clean_traits(parsed.traits.as_dict())
     # Keep interview traits when the model drops them.
     interview_traits = payload.get("interview_traits") or {}
     if isinstance(interview_traits, dict):
@@ -296,8 +333,7 @@ def run_quizgen_agent(
         f"Propose exactly {count} new short assessment questions for joiners."
     )
     try:
-        response = get_client().models.generate_content(
-            model=MODEL_ID,
+        response = generate(
             contents=prompt,
             config=types.GenerateContentConfig(
                 system_instruction=(
@@ -365,8 +401,7 @@ def run_gemini_matchmaker(viewer_profile: dict, candidates: list[dict], event_co
     """
 
     try:
-        response = get_client().models.generate_content(
-            model=MODEL_ID,
+        response = generate(
             contents=prompt,
             config=types.GenerateContentConfig(
                 system_instruction=(

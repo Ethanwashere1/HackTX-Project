@@ -6,7 +6,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel, Field, StringConstraints, model_validator
 
 from app.auth.deps import CurrentUser
-from app.services import agents as agents_client
+from app.services import agents_client
 
 router = APIRouter(prefix="/api", tags=["question-suggestions"])
 

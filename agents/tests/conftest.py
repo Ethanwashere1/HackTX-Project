@@ -10,6 +10,7 @@ os.environ["INTERNAL_API_KEY"] = "test-internal-key"
 os.environ["BACKEND_URL"] = "http://backend.test"
 os.environ["GEMINI_MODEL"] = ""
 os.environ["GEMINI_LIVE_MODEL"] = ""
+os.environ["GEMINI_FALLBACK_MODELS"] = ""
 
 import httpx
 import pytest

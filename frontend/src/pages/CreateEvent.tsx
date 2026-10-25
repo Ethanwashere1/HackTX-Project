@@ -1,7 +1,9 @@
 import { useState, type FormEvent } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
-import type { EventType, QuestionKind, Tone } from "../api/types";
+import { errorMessage } from "../api/errors";
+import type { CreateEventBody, EventType, QuestionIn, QuestionKind, Tone } from "../api/types";
+import { useAuth } from "../auth/AuthContext";
 
 type DraftQ = { text: string; kind: QuestionKind; options: string; required: boolean };
 
@@ -29,14 +31,37 @@ function resizeQuestions(current: DraftQ[], count: number): DraftQ[] {
   const n = Math.max(0, Math.min(MAX_QUESTIONS, Math.floor(count)));
   if (n === current.length) return current;
   if (n < current.length) return current.slice(0, n);
-  return [
-    ...current,
-    ...Array.from({ length: n - current.length }, () => ({ ...EMPTY_Q })),
-  ];
+  return [...current, ...Array.from({ length: n - current.length }, () => ({ ...EMPTY_Q }))];
+}
+
+const isChoice = (kind: QuestionKind) => kind === "single_choice" || kind === "multi_choice";
+
+/** A filled-in draft as the contract's QuestionIn, or null if it isn't valid yet. */
+function toQuestionIn(q: DraftQ): QuestionIn | null {
+  const text = q.text.trim();
+  if (!text) return null;
+  const options = isChoice(q.kind)
+    ? [...new Set(q.options.split(",").map((s) => s.trim()).filter(Boolean))]
+    : null;
+  if (options && options.length === 0) return null;
+  return { text, kind: q.kind, required: q.required, options };
+}
+
+/** "Experience level, skills" -> ["experience_level", "skills"] (contract: ^[a-z][a-z0-9_]{0,49}$). */
+function fieldKeys(raw: string): string[] {
+  const keys = raw
+    .split(",")
+    .map((s) => s.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, ""))
+    .filter((k) => /^[a-z][a-z0-9_]{0,49}$/.test(k));
+  return [...new Set(keys)];
 }
 
 export function CreateEventPage() {
   const navigate = useNavigate();
+  const { me } = useAuth();
+  const [params] = useSearchParams();
+  const myOrgs = me?.orgs ?? [];
+  const [orgId, setOrgId] = useState<string>(params.get("org") ?? myOrgs[0]?.org_id ?? "");
   const [name, setName] = useState("HackTX squad-up");
   const [description, setDescription] = useState("Find your hackathon squad");
   const [type, setType] = useState<EventType>("structured");
@@ -44,10 +69,56 @@ export function CreateEventPage() {
   const [groupCount, setGroupCount] = useState(6);
   const [minSize, setMinSize] = useState(3);
   const [maxSize, setMaxSize] = useState(4);
+  const [maxGroupsPerUser, setMaxGroupsPerUser] = useState(1);
+  const [requiredFields, setRequiredFields] = useState("skills, experience_level");
+  const [startsAt, setStartsAt] = useState("");
   const [interview, setInterview] = useState(true);
   const [questions, setQuestions] = useState<DraftQ[]>(DEFAULT_QUESTIONS);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [hint, setHint] = useState("");
+  const [suggesting, setSuggesting] = useState(false);
+  const [suggestError, setSuggestError] = useState<string | null>(null);
+
+  /** POST /api/question-suggestions: AI drafts that get appended to the editable list. */
+  async function suggestQuestions() {
+    setSuggesting(true);
+    setSuggestError(null);
+    try {
+      const room = MAX_QUESTIONS - questions.length;
+      if (room <= 0) throw new Error(`You already have the maximum of ${MAX_QUESTIONS} questions.`);
+      const res = await api.suggestQuestions({
+        name: name.trim() || "Untitled event",
+        type,
+        tone,
+        description,
+        existing_questions: questions.map(toQuestionIn).filter((x): x is QuestionIn => x !== null),
+        count: Math.min(3, room),
+        hint: hint.trim() || null,
+      });
+      if (res.questions.length === 0) throw new Error("No suggestions came back — try a hint.");
+      // Fill blank slots first, then append.
+      const drafts: DraftQ[] = res.questions.map((sq) => ({
+        text: sq.text,
+        kind: sq.kind,
+        options: (sq.options ?? []).join(", "),
+        required: sq.required,
+      }));
+      setQuestions((prev) => {
+        const next = [...prev];
+        for (const d of drafts) {
+          const blank = next.findIndex((x) => !x.text.trim());
+          if (blank >= 0) next[blank] = d;
+          else if (next.length < MAX_QUESTIONS) next.push(d);
+        }
+        return next;
+      });
+    } catch (err) {
+      setSuggestError(errorMessage(err, "Couldn't get suggestions"));
+    } finally {
+      setSuggesting(false);
+    }
+  }
 
   function setQuestionCount(count: number) {
     setQuestions((prev) => resizeQuestions(prev, count));
@@ -62,33 +133,36 @@ export function CreateEventPage() {
       if (filled.length === 0) {
         throw new Error("Add at least one question (or set the count above zero).");
       }
-      const body: Record<string, unknown> = {
-        org_id: "org_ut",
+      const body: CreateEventBody = {
         name,
         description,
         type,
         tone,
         interview_enabled: interview,
-        required_fields: type === "structured" ? ["skills", "experience_level"] : ["subjects"],
+        required_fields: fieldKeys(requiredFields),
         questions: filled.map((q) => ({
-          text: q.text,
+          text: q.text.trim(),
           kind: q.kind,
           required: q.required,
-          options:
-            q.kind === "single_choice" || q.kind === "multi_choice"
-              ? q.options.split(",").map((s) => s.trim()).filter(Boolean)
-              : null,
+          options: isChoice(q.kind)
+            ? [...new Set(q.options.split(",").map((s) => s.trim()).filter(Boolean))]
+            : null,
         })),
       };
+      // Without an org the event is unlisted and reachable by link only.
+      if (orgId) body.org_id = orgId;
+      if (startsAt) body.starts_at = new Date(startsAt).toISOString();
+      // Informal events must omit the group settings (422 otherwise).
       if (type === "structured") {
         body.group_count = groupCount;
         body.min_size = minSize;
         body.max_size = maxSize;
+        body.max_groups_per_user = maxGroupsPerUser;
       }
       const res = await api.createEvent(body);
       navigate(`/events/${res.event_id}`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create event");
+      setError(errorMessage(err, "Failed to create event"));
     } finally {
       setBusy(false);
     }
@@ -100,6 +174,19 @@ export function CreateEventPage() {
       <p className="su-page-sub">Host a structured squad-up or an informal 1:1 connection event.</p>
 
       <form className="su-card" style={{ padding: "1.25rem", maxWidth: 720 }} onSubmit={(e) => void onSubmit(e)}>
+        <div className="su-field">
+          <label className="su-label" htmlFor="org">
+            Organization
+          </label>
+          <select id="org" className="su-select" value={orgId} onChange={(e) => setOrgId(e.target.value)}>
+            {myOrgs.map((o) => (
+              <option key={o.org_id} value={o.org_id}>
+                {o.name} (members only)
+              </option>
+            ))}
+            <option value="">No organization (unlisted, anyone with the link)</option>
+          </select>
+        </div>
         <div className="su-field">
           <label className="su-label" htmlFor="name">
             Event name
@@ -151,6 +238,16 @@ export function CreateEventPage() {
         {type === "structured" ? (
           <div className="su-grid-2">
             <div className="su-field">
+              <label className="su-label">Max squads per person</label>
+              <input
+                className="su-input"
+                type="number"
+                min={1}
+                value={maxGroupsPerUser}
+                onChange={(e) => setMaxGroupsPerUser(Number(e.target.value))}
+              />
+            </div>
+            <div className="su-field">
               <label className="su-label">Squad count</label>
               <input
                 className="su-input"
@@ -181,6 +278,33 @@ export function CreateEventPage() {
             </div>
           </div>
         ) : null}
+
+        <div className="su-grid-2">
+          <div className="su-field">
+            <label className="su-label" htmlFor="fields">
+              Profile fields everyone fills in (comma-separated)
+            </label>
+            <input
+              id="fields"
+              className="su-input"
+              value={requiredFields}
+              placeholder="skills, experience_level"
+              onChange={(e) => setRequiredFields(e.target.value)}
+            />
+          </div>
+          <div className="su-field">
+            <label className="su-label" htmlFor="starts">
+              Starts at (optional)
+            </label>
+            <input
+              id="starts"
+              className="su-input"
+              type="datetime-local"
+              value={startsAt}
+              onChange={(e) => setStartsAt(e.target.value)}
+            />
+          </div>
+        </div>
 
         <label className="su-label" style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
           <input type="checkbox" checked={interview} onChange={(e) => setInterview(e.target.checked)} />
@@ -216,6 +340,36 @@ export function CreateEventPage() {
         <p style={{ margin: "0.35rem 0 1rem", color: "var(--su-text-muted)", fontSize: "0.85rem" }}>
           Set how many questions joiners answer (0–{MAX_QUESTIONS}). Add, remove, or edit each one below.
         </p>
+
+        <div
+          className="su-card"
+          style={{ padding: "0.9rem", marginBottom: "0.75rem", boxShadow: "none" }}
+          aria-label="AI question suggestions"
+        >
+          <div className="su-field" style={{ marginBottom: "0.6rem" }}>
+            <label className="su-label" htmlFor="q-hint">
+              Ask AI for questions (optional hint)
+            </label>
+            <input
+              id="q-hint"
+              className="su-input"
+              value={hint}
+              placeholder="e.g. focus on availability and project ideas"
+              onChange={(e) => setHint(e.target.value)}
+            />
+          </div>
+          <button
+            type="button"
+            className="su-btn su-btn-secondary"
+            disabled={suggesting || questions.length >= MAX_QUESTIONS}
+            onClick={() => void suggestQuestions()}
+          >
+            {suggesting ? "Thinking…" : "✨ Suggest questions"}
+          </button>
+          {suggestError ? (
+            <p style={{ color: "var(--su-danger)", margin: "0.5rem 0 0" }}>{suggestError}</p>
+          ) : null}
+        </div>
 
         {questions.map((q, i) => (
           <div key={i} className="su-card" style={{ padding: "0.9rem", marginBottom: "0.75rem", boxShadow: "none" }}>

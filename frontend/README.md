@@ -10,13 +10,22 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:5173 — mocks are on by default (`VITE_USE_MOCKS=1`).
+Open http://localhost:5173. By default the app talks to the real backend (start it from `backend/` with
+`APP_ENV=local DEV_LOGIN=1 uv run uvicorn app.main:app --port 8001`, after `uv run alembic upgrade head`
+and `uv run python -m app.seed --fake-embeddings`). Under `npm run dev` the login page shows a dev-login
+picker for the seed users (Priya Sharma, Ana Ruiz, Morgan Reyes).
 
-Demo path: **Continue with Google** → UT Austin feed → HackTX event → join → interview → recommendations → request/chat → squad page.
+To run without a backend, set `VITE_USE_MOCKS=1` (only the exact value `1` enables the in-browser mocks
+in `src/api/mocks.ts`).
+
+Demo path: dev login → UT Austin feed → HackTX event → join → interview → recommendations → request/chat → squad page.
 
 ## API
 
 - Proxies `/api` → `http://localhost:8001`
-- Set `VITE_USE_MOCKS=0` to hit the real backend / database
-- Dummy seed lives in `src/demo/` — delete that folder (or set `VITE_USE_MOCKS=0`) for production
-- Campus signals call `GET /api/enrichment/context` (SerpAPI: Maps, Events/calendar, social, + browser geolocation)
+- The interview connects to the `ws_url` returned by `POST /api/events/{id}/interview` (contract section 9).
+- `src/api/types.ts` mirrors `docs/CONTRACT.md`; errors are thrown as `ApiError` with the contract's `error.code`.
+- AI assists: `POST /api/question-suggestions` drafts questionnaire questions on Create event, and
+  `GET /api/me/profile` returns the AI `overview` shown on the profile page.
+- Campus signals on the org feed call `GET /api/enrichment/context` (SerpAPI Maps, Events/calendar and social
+  lookup, plus browser geolocation). The backend serves demo fallbacks when `SERPAPI_API_KEY` is unset.

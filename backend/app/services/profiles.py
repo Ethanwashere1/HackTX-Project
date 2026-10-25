@@ -156,27 +156,25 @@ def refresh_member_texts(
 def on_member_text_changed(member_ids: list[str]) -> None:
     """Hook: these event members' `profile_text` changed and is committed.
 
-    Runs as a background task after the response, so it must open its own DB session
-    (`with Session(app.db.get_engine()) as db:`) and must never raise into the caller.
-
-    TODO(embeddings builder): embed each member's profile_text with Gemini, store it in
-    `event_members.embedding` + `embedded_at` (pgvector) and sync to Snowflake
-    (`snowflake_synced_at`). Skip while not configured; leave the embedding null on failure.
+    Runs as a background task after the response: embeds each profile_text with Gemini into
+    `event_members.embedding` (pgvector) and syncs it to Snowflake. Opens its own DB session,
+    skips while Gemini isn't configured, leaves the embedding null on failure and never raises.
     """
-    log.debug("member texts changed: %s; embedding not implemented yet", member_ids)
+    from app.services.embeddings import embed_members
+
+    embed_members(member_ids)
 
 
 def schedule_social_lookup(user_id: str, socials: list[dict[str, Any]]) -> None:
     """Hook: the user submitted these social handles ([{kind, value}]).
 
-    Runs as a background task after the response, so it must open its own DB session and must
-    never raise into the caller.
-
-    TODO(SerpAPI builder): look the handles up (cached in social_lookups), write
-    `profiles.social_notes`, then call schedule_overview_refresh(user_id) (which re-embeds).
-    Skip on failure or while SERPAPI_API_KEY is not configured.
+    Runs as a background task after the response: looks the handles up via SerpAPI (cached in
+    social_lookups), writes `profiles.social_notes`, then refresh_member_texts. Opens its own DB
+    session, never raises, and skips on failure or while SERPAPI_API_KEY is not configured.
     """
-    log.debug("user %s: SerpAPI lookup of %d handles not implemented yet", user_id, len(socials))
+    from app.services.socials import lookup_socials  # imported here: socials imports this module
+
+    lookup_socials(user_id, socials)
 
 
 def _latest_membership(
@@ -209,7 +207,9 @@ def overview_request_body(
         "user": {"user_id": user.id, "name": user.name},
         "answers": dict(member.answers) if member and member.answers else {},
         "fields": dict(member.fields) if member and member.fields else {},
-        "social_notes": profile.social_notes,
+        # Withheld: the overview is shown on other people's recommendation cards and sent to the
+        # agents as candidate text, where SerpAPI social info must not reach (contract section 4).
+        "social_notes": None,
         "interview_summary": profile.summary,
         "interview_traits": dict(profile.traits) if profile.traits else {},
     }
@@ -235,18 +235,20 @@ def apply_overview_result(profile: Profile, result: dict[str, Any]) -> None:
 def regenerate_overview(db: Session, user_id: str, *, event_id: str | None = None) -> bool:
     """Call agents /profile-overview, persist on success, refresh member texts. Returns True if saved.
 
-    Opens no sessions of its own; caller provides `db`. Failures leave the prior overview alone.
+    Opens no sessions of its own; caller provides `db`. No transaction or row lock is held during
+    the agents call. Failures leave the prior overview alone.
     """
-    from app.services import agents as agents_client
+    from app.services import agents_client
 
     user = db.get(User, user_id)
     if user is None:
         return False
-    profile = get_or_create_profile(db, user_id, lock=True)
-    body = overview_request_body(db, user, profile, event_id=event_id)
+    body = overview_request_body(db, user, get_or_create_profile(db, user_id), event_id=event_id)
+    db.commit()  # release the connection before the network call
     result = agents_client.fetch_profile_overview(body)
     if result is None:
         return False
+    profile = get_or_create_profile(db, user_id, lock=True)
     apply_overview_result(profile, result)
     db.add(profile)
     db.commit()
@@ -273,13 +275,9 @@ def schedule_overview_refresh(user_id: str, event_id: str | None = None) -> None
 
 
 def on_interview_summary_saved(user_id: str, event_id: str | None = None) -> None:
-    """Call after interview summary/traits are committed: regenerate overview + re-embed."""
+    """Background hook after interview summary/traits are committed: regenerate the overview,
+    which re-embeds on success."""
     schedule_overview_refresh(user_id, event_id)
-
-
-def on_social_notes_updated(user_id: str) -> None:
-    """Call after SerpAPI (or similar) writes profiles.social_notes: regenerate overview + re-embed."""
-    schedule_overview_refresh(user_id)
 
 
 def run_hook(hook: Callable[..., None], *args: Any) -> None:

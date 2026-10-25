@@ -2,7 +2,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session, select
 
 from app.errors import AppError
-from app.models import ContactMethod, Org, OrgMember, User
+from app.models import ContactMethod, Org, OrgMember, Profile, User
 from app.models.base import utcnow
 
 
@@ -91,4 +91,24 @@ def me_payload(db: Session, user: User) -> dict:
         "avatar_url": user.avatar_url,
         "orgs": [{"org_id": org_id, "name": name} for org_id, name in orgs],
         "contacts": list_contacts(db, user.id),
+    }
+
+
+def my_profile_payload(db: Session, user: User) -> dict:
+    """The GET /api/me/profile body: the user's own shared profile. Leaves out the SerpAPI
+    `social_notes` and the interview transcript. `overview` is the AI blurb (null until generated);
+    `interviewed` is true once a summary is saved."""
+    profile = db.exec(select(Profile).where(Profile.user_id == user.id)).first()
+    return {
+        "user_id": user.id,
+        "name": user.name,
+        "email": user.email,
+        "overview": profile.overview if profile else None,
+        "summary": profile.summary if profile else None,
+        "traits": (profile.traits or None) if profile else None,
+        "socials": [
+            {"kind": s["kind"], "value": s["value"]} for s in (profile.socials if profile else [])
+        ],
+        "contacts": list_contacts(db, user.id),
+        "interviewed": profile is not None and profile.summary is not None,
     }

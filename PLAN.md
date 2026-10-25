@@ -36,16 +36,16 @@ _Last updated: 2026-10-25 (HackTX weekend). **Pivoted to the new product spec.**
 - **Fallback:** if Snowflake is down or slow, the backend runs the same similarity query with pgvector in TigerData.
 
 **Recommendation pipeline:**
-1. A profile is saved or updated: questionnaire answers + SerpAPI social info + interview summary → agents `POST /profile-overview` refreshes the shared overview/traits.
+1. A profile is saved or updated: questionnaire answers + SerpAPI social info + interview summary. After a join or an interview summary, agents `POST /profile-overview` refreshes the shared overview/traits (from answers + interview; SerpAPI notes are withheld for privacy).
 2. The backend embeds the profile text (answers + socials + interview + overview) with the Gemini embeddings API, stores the vector in TigerData (pgvector), and syncs it to Snowflake.
-3. `GET recommendations` runs a Snowflake similarity query for the top ~20 candidates in the same event. It excludes yourself, your current group-mates, and people or groups you've declined. Groups that are already full are excluded too.
-4. The backend calls agents `POST /recommend` (with optional `traits` / `topic_signals` / `group_need`) to rerank to the top N, each with a reason that considers topic overlap and complementary working traits.
+3. `GET recommendations` runs a Snowflake similarity query for the top ~20 candidates in the same event. It excludes yourself, your current group-mates, people or groups you've declined, and anyone with a pending request to or from you. Groups that are already full are excluded too.
+4. The backend calls agents `POST /recommend` (with optional `traits` / `topic_signals` / `group_need`) to rerank the candidates to the top N, each with a reason that considers topic overlap and complementary working traits.
 5. On agent failure or timeout, the user gets the similarity order without reasons (`ranked_by: "similarity"`).
 
 **AI feature map (product AI = `agents/`; wiring = backend; UI = frontend):**
 | User-facing need | Agents endpoint | Backend | Frontend |
 |---|---|---|---|
-| Profile overview | `POST /profile-overview` | store `overview`/`traits`; call after join/interview/socials | Profile page shows overview |
+| Profile overview | `POST /profile-overview` | store `overview`/`traits`; call after join/interview (SerpAPI notes withheld) | Profile page shows overview |
 | Quiz/assessment questions | `POST /generate-questions` | `POST /api/question-suggestions` proxy | Create-event questionnaire "Suggest questions" |
 | Live interview | `WS /ws/interview` + Summarizer → `/internal/.../summary` | interview token + internal config/summary | Interview screen (mic + text fallback) |
 | Match / recommend | `POST /recommend` (enriched) | similarity + payload enrichment | Recommendations page |
@@ -54,7 +54,7 @@ _Last updated: 2026-10-25 (HackTX weekend). **Pivoted to the new product spec.**
 - **Gemini agents run inside the product (`agents/`, Gemini dev owns all prompts and logic):**
   - **Interviewer:** optional live voice over WebSocket (Gemini Live) + text fallback.
   - **Summarizer:** transcript → interview summary + traits → POSTs to the backend.
-  - **Profiler / Overview:** questionnaire + socials + interview → profile `overview` + merged traits.
+  - **Profiler / Overview:** questionnaire + interview (the backend sends `social_notes: null`) → profile `overview` + merged traits.
   - **QuizGen:** event context → short questionnaire question drafts for the host.
   - **Recommender:** reranks candidates with reasons using traits, topic signals, and group need.
 - **`ai-swarm/` (Agent SDK):** run/build/test orchestration for `agents/` only — pytest harness, contract-shape checks, prompt QA. Patterned on `uiux-swarm/`. See [docs/AI_SWARM.md](docs/AI_SWARM.md). Does not replace product AI.
@@ -70,10 +70,10 @@ _Last updated: 2026-10-25 (HackTX weekend). **Pivoted to the new product spec.**
 - **Frontend devs (`frontend/`):** all UI (including overview display and quiz-suggest UX), plus all frontend unit/regression tests. Backend tests stay with the Claude tester.
 
 ## Contract summary
-See [docs/CONTRACT.md](docs/CONTRACT.md) (DRAFT v1.0-pre.5). It covers:
+See [docs/CONTRACT.md](docs/CONTRACT.md) (DRAFT v1.0-pre.8). It covers:
 - the session-cookie auth flow and `GET /api/me/profile` (overview + interview summary)
-- `/api` endpoints for orgs, events, joining, `POST /api/question-suggestions`, recommendations, requests, threads/chat/call and groups
-- `/internal` interview config/summary; agents `POST /recommend`, `POST /profile-overview`, `POST /generate-questions`; interview WebSocket (§9)
+- `/api` endpoints for orgs (plus the `/api/enrichment/*` campus signals), events, joining, `POST /api/question-suggestions`, recommendations, requests, threads/chat/call and groups
+- `/internal` interview config/summary; agents `POST /recommend`, `POST /profile-overview`, `POST /generate-questions`; interview WebSocket (section 9)
 - Swarm brief: [docs/AI_SWARM.md](docs/AI_SWARM.md)
 
 ## Milestones
@@ -144,36 +144,37 @@ See [docs/CONTRACT.md](docs/CONTRACT.md) (DRAFT v1.0-pre.5). It covers:
 - [x] **M0** (builder) Google OAuth (authorization code flow with a state check), httpOnly session cookie, `GET /api/me`, logout — done when the frontend login round-trips (depends on: Google client ID). _Code-complete and tested against a mocked Google; not yet tried with real Google credentials or the frontend. Dev-only `POST /api/auth/dev-login` for local use._
 - [x] **M0** (builder) Schema — done when migrations apply cleanly (on the embedded Postgres; plus InterviewToken and UserSession). Tables: User, ContactMethod, Org, OrgMember (role, status), OrgRosterEntry, Event (incl. `max_groups_per_user`), Question, EventMember (answers), Profile (summary, embedding), Group, GroupMember, Request, Thread, Message, Connection
 - [x] **M1** (builder) Events create/get/join with host parameters, questionnaire validation and the required profile fields — done when create → join stores the answers (depends on: schema). _Also `POST /api/events/{id}/interview` (hashed 10-min token). Join builds `profile_text`; the embedding and SerpAPI steps are hooks in `app/services/profiles.py` for their own tasks. M0 review fixes applied in the same pass._
-- [ ] **M1** (builder) Embeddings and Snowflake — done when a new joiner appears in Snowflake within seconds (depends on: Snowflake account):
+- [x] **M1** (builder) Embeddings and Snowflake — done when a new joiner appears in Snowflake within seconds (depends on: Snowflake account). _Done with mocked tests only; the Snowflake vector SQL (`PARSE_JSON(...)::ARRAY::VECTOR(FLOAT,768)`, MERGE, `VECTOR_COSINE_SIMILARITY`) has not been run against real Snowflake._
   - embed the profile text with Gemini embeddings and store it in pgvector
   - sync it to a Snowflake table
-- [ ] **M1** (builder) `GET /api/events/{id}/recommendations` — done when the user gets ranked people and open groups, and the fallbacks are tested (depends on: embeddings, agents stub):
+- [x] **M1** (builder) `GET /api/events/{id}/recommendations` — done when the user gets ranked people and open groups, and the fallbacks are tested (depends on: embeddings, agents stub). _Done; fallback chain Snowflake → pgvector → agents rerank → similarity order._
   - Snowflake similarity, with exclusion rules and full groups removed
   - pgvector fallback
   - agents `/recommend` rerank with enriched `traits` / `topic_signals` / `group_need` when available, with a similarity-order fallback
   - `people[].summary` prefers profile `overview` over interview `summary`
-- [x] **M1** (builder) Profile overview wiring — done when join (and later interview/socials) stores overview asynchronously and tests cover agents failure without failing join (depends on: agents `/profile-overview`, schema `overview` column or equivalent):
-  - `GET /api/me/profile` returns overview, summary, traits, contacts, socials
-  - after join / interview-summary / social_notes update: call agents `POST /profile-overview`, persist overview + merged traits, then re-embed
+- [x] **M1** (builder) Profile overview wiring — done when join and interview summary store the overview asynchronously and tests cover agents failure without failing the join (depends on: agents `/profile-overview`, migration 0003 `profiles.overview`):
+  - `GET /api/me/profile` returns overview, summary, traits, contacts, socials, interviewed
+  - after a join / interview summary: call agents `POST /profile-overview` (no DB connection held during the call), persist overview + merged traits, then re-embed. SerpAPI `social_notes` are not sent (privacy; CONTRACT section 8).
 - [x] **M1** (builder) `POST /api/question-suggestions` — done when it proxies to agents `/generate-questions`, validates count/kinds, returns 502 `agents_unavailable` on timeout, and API tests pass (depends on: agents QuizGen)
-- [ ] **M1** (builder) Requests and consent — done when no group ever exceeds max_size or group_count and no user exceeds the event's `max_groups_per_user`, including when two accepts arrive at once (depends on: schema):
+- [x] **M1** (builder) Host join rule and campus signals: a host joining their own event is 403 `is_host`; `GET /api/enrichment/context|maps|calendar|social` (signed-in only, SerpAPI through `services/socials.py`, demo fallback, 10-min cache).
+- [x] **M1** (builder) Requests and consent — done when no group ever exceeds max_size or group_count and no user exceeds the event's `max_groups_per_user`, including when two accepts arrive at once (depends on: schema). _Done, with concurrency tests; crossing requests now resolve together (one group or connection)._
   - `POST /api/requests` to a user or a group
   - accept/decline
   - a group forms or a member is added only after both sides accept
   - enforce max_size and group_count with a row lock
-- [ ] **M1** (builder) `GET /api/groups/{id}` team page — done when it's tested for members vs non-members (depends on: requests):
-  - members, roles and summaries (prefer overview)
+- [x] **M1** (builder) `GET /api/groups/{id}` team page — done when it's tested for members vs non-members (depends on: requests). _Ticked from the code: `routers/groups.py` plus `tests/test_threads_groups.py` (members-only page, contacts never leak, rename, leave)._
+  - members, owner (`owner_user_id`), roles and summaries (prefer overview)
   - contact methods shown only to members
-- [ ] **M1** (builder) Seed script: an org, one structured and one informal event, and about 15 profiled users with embeddings + sample overviews/traits — done when recommendations work on seed data (depends on: embeddings, overview)
-- [ ] **M2** (builder) Internal endpoints `interview-config` and `interview-summary`, plus the interview token — done when the agents service round-trips, overview regenerates, and profiles re-embed (depends on: schema, overview wiring)
-- [ ] **M2** (builder) Threads and messages (created with each request and group), plus a call link (Jitsi room URL) — done when two users chat via polling (depends on: requests)
-- [ ] **M2** (builder) Informal events: 1:1 connection requests and a connections list, no groups — done when tested (depends on: requests)
-- [ ] **M3** (builder) Orgs — done when only approved members see the feed and only org admins can approve (depends on: schema):
+- [x] **M1** (builder) Seed script: an org, one structured and one informal event, and about 15 profiled users with embeddings — done when recommendations work on seed data (depends on: embeddings). _Done: `uv run python -m app.seed [--fake-embeddings|--reset|--wipe]`; also covers the M4 demo reset script. Not yet: sample overviews/traits on seed users._
+- [x] **M2** (builder) Internal endpoints `interview-config` and `interview-summary`, plus the interview token — done when the agents service round-trips, the overview regenerates and the profile re-embeds (depends on: schema, overview wiring). _Done; token rules and limits in CONTRACT section 8. Traits shape is an open question (below)._
+- [x] **M2** (builder) Threads and messages (created with each request and group), plus a call link (Jitsi room URL) — done when two users chat via polling (depends on: requests). _Ticked from the code: `routers/threads.py` plus `tests/test_threads_groups.py` (request-thread chat, stable call URL, group thread follows membership)._
+- [x] **M2** (builder) Informal events: 1:1 connection requests and a connections list, no groups — done when tested (depends on: requests). _Done; connections list shape in CONTRACT section 7._
+- [x] **M3** (builder) Orgs — done when only approved members see the feed and only org admins can approve (depends on: schema). _Done; builder-decided details (roster matching, feed window, PATCH semantics) in CONTRACT section 2._
   - create an org (creator becomes admin) and choose a verification method: `manual`, `email_domain`, or `roster`
   - join requests: `email_domain` and `roster` auto-approve on a match, otherwise the request waits for an admin; `manual` always waits
   - admins approve/decline requests and upload a roster (CSV of names and/or emails)
   - feed of upcoming events; creating events inside an org
-- [ ] **M3** (builder) SerpAPI social lookup on join or profile update — done when a failed lookup still lets the user join and get recommendations (depends on: SerpAPI key):
+- [x] **M3** (builder) SerpAPI social lookup on join or profile update — done when a failed lookup still lets the user join and get recommendations (depends on: SerpAPI key). _Done; not verified against real SerpAPI. `social_notes` is untrusted text that reaches the agents._
   - optional and cached
   - manual handle entry as a fallback
   - the result feeds the profile text
@@ -181,7 +182,7 @@ See [docs/CONTRACT.md](docs/CONTRACT.md) (DRAFT v1.0-pre.5). It covers:
 - [ ] **M4** (lead + builder) Deploy on Vultr — done when the demo script runs on the public URL:
   - Docker Compose: backend, agents, frontend build, Caddy HTTPS
   - .tech domain, env and secrets, OAuth redirect URIs
-  - demo reset script
+  - demo reset script (_done via `app.seed --reset`_)
 
 ## Risks
 - **Live voice audio and latency** (PCM formats, mic permissions; HTTPS needed off localhost). Mitigation: text fallback from M2, and an early HTTPS deploy test.
@@ -207,7 +208,10 @@ See [docs/CONTRACT.md](docs/CONTRACT.md) (DRAFT v1.0-pre.5). It covers:
 9. Does the Gemini dev agree with `/recommend`, the interview WebSocket and the audio formats? **Yes.**
 10. Can a user be in more than one group per event? **Decided:** one group per structured event by default; the host can raise it with the event's `max_groups_per_user` setting.
 11. Credentials: real TigerData, Google OAuth, Gemini, Snowflake and SerpAPI values come later. Until then `backend/.env` holds placeholders.
-12. Quiz/assessment question generation? **Decided (2026-10-25):** new agents `POST /generate-questions` + backend `POST /api/question-suggestions`; host still saves via create-event. Awaiting Gemini + frontend confirm on shapes in CONTRACT v1.0-pre.5.
-13. Profile overview vs interview summary? **Decided:** keep interview `summary` separate; add AI `overview` from questionnaire + socials + interview. Recs/team page prefer overview.
-14. Who scaffolds `ai-swarm/`? **Assumed:** lead or Cursor agent from docs/AI_SWARM.md; Gemini owns product code in `agents/` and uses the swarm for QA. Claude does not write `ai-swarm/` product prompts into `agents/`.
-15. Do we need durable "prior engagement history" across events for matching? **Assumed for demo:** derive `topic_signals` / traits from the current profile + past event answers already stored for that user; no separate analytics store. Revisit post-demo if needed.
+12. **For the Gemini dev:** interview summary `traits` shape. CONTRACT section 8 shows flat traits (`{"working_style": …}`), but `agents/interview.py` sends `{"highlights": [...]}`. The backend accepts any JSON object, so both work today; which shape is canonical?
+13. Recommendations: should people who have hit `max_groups_per_user`, or everyone once the event has `group_count` groups, be excluded? **Resolved: yes.** Recommendations now follow the accept rules. People at their group limit are excluded but stay reachable through their open group. There are no people once the event has `group_count` groups, and nothing at all once the viewer is at their own limit (CONTRACT section 4).
+14. Org API proposals (frontend input wanted): return the auto-approved count from `PUT /roster`. (Done in CONTRACT v1.0-pre.7: `name` in the feed response and `GET /api/orgs/{org_id}`.)
+15. Quiz/assessment question generation? **Decided (2026-10-25):** new agents `POST /generate-questions` + backend `POST /api/question-suggestions`; host still saves via create-event.
+16. Profile overview vs interview summary? **Decided:** keep interview `summary` separate; add AI `overview` from questionnaire + interview (SerpAPI notes withheld, since the overview is shown to non-connections). Recs/team page prefer overview.
+17. Who scaffolds `ai-swarm/`? **Assumed:** lead or Cursor agent from docs/AI_SWARM.md; Gemini owns product code in `agents/` and uses the swarm for QA. Claude does not write `ai-swarm/` product prompts into `agents/`.
+18. Do we need durable "prior engagement history" across events for matching? **Assumed for demo:** derive `topic_signals` / traits from the current profile + past event answers already stored for that user; no separate analytics store. Revisit post-demo if needed.

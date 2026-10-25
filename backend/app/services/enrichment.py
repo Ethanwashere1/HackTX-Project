@@ -1,21 +1,27 @@
-"""SerpAPI client for Maps, Events (calendar-like), social search, and nearby places.
+"""Campus signals for the org feed (GET /api/enrichment/*): Google Maps places and Google Events
+via SerpAPI, plus the social preview from app.services.socials.
 
-When SERPAPI_API_KEY is missing or a call fails, callers get structured demo fallbacks
-so the product demo never hard-depends on the live key.
+SerpAPI requests go through socials.serpapi_search (the backend's one SerpAPI path). Answers are
+cached in memory for CACHE_TTL so feed reloads don't spend searches. When SERPAPI_API_KEY is missing
+or a call fails, callers get structured demo fallbacks so the demo never depends on the live key.
 """
 
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 import httpx
 
 from app.config import get_settings
+from app.services.socials import SerpApiError, serpapi_search, social_preview
 
 log = logging.getLogger(__name__)
 
-SERPAPI_BASE = "https://serpapi.com/search.json"
+CACHE_TTL_S = 600
+CACHE_MAX = 256
+_cache: dict[tuple, tuple[float, dict[str, Any]]] = {}
 
 
 def _demo_places(query: str, lat: float | None, lng: float | None) -> list[dict[str, Any]]:
@@ -77,33 +83,28 @@ def _demo_calendar(query: str) -> list[dict[str, Any]]:
     ]
 
 
-def _demo_social(kind: str, handle: str) -> dict[str, Any]:
-    return {
-        "kind": kind,
-        "handle": handle,
-        "display_name": handle.lstrip("@"),
-        "bio": "Builder · UT Austin · open to HackTX squads",
-        "profile_url": f"https://{kind}.com/{handle.lstrip('@')}",
-        "notes": "Public profile signals: React, campus tools, climate apps.",
-    }
-
-
-async def _serpapi_get(params: dict[str, Any]) -> dict[str, Any] | None:
+def _serpapi_get(params: dict[str, Any]) -> dict[str, Any] | None:
+    """The SerpAPI answer for `params` (cached), or None when not configured or on failure."""
     settings = get_settings()
     if not settings.serpapi_configured:
         return None
-    payload = {**params, "api_key": settings.serpapi_api_key}
+    key = tuple(sorted(params.items()))
+    hit = _cache.get(key)
+    if hit and time.monotonic() - hit[0] < CACHE_TTL_S:
+        return hit[1]
     try:
-        async with httpx.AsyncClient(timeout=settings.serpapi_timeout_s) as client:
-            res = await client.get(SERPAPI_BASE, params=payload)
-            res.raise_for_status()
-            return res.json()
-    except Exception:
-        log.exception("SerpAPI request failed (%s)", params.get("engine"))
+        with httpx.Client(timeout=settings.serpapi_timeout_s) as client:
+            data = serpapi_search(client, settings.serpapi_api_key, params)
+    except SerpApiError as exc:
+        log.warning("SerpAPI %s search failed: %s", params.get("engine"), exc)
         return None
+    if len(_cache) >= CACHE_MAX:
+        _cache.clear()
+    _cache[key] = (time.monotonic(), data)
+    return data
 
 
-async def search_maps(
+def search_maps(
     query: str,
     *,
     lat: float | None = None,
@@ -115,9 +116,9 @@ async def search_maps(
         "type": "search",
     }
     if lat is not None and lng is not None:
-        params["ll"] = f"@{lat},{lng},14z"
+        params["ll"] = f"@{lat:.3f},{lng:.3f},14z"  # ~100 m: enough for nearby, and caches better
 
-    data = await _serpapi_get(params)
+    data = _serpapi_get(params)
     if not data:
         return {
             "source": "demo_fallback",
@@ -151,9 +152,9 @@ async def search_maps(
     return {"source": "serpapi", "engine": "google_maps", "results": results[:8]}
 
 
-async def search_calendar_events(query: str) -> dict[str, Any]:
+def search_calendar_events(query: str) -> dict[str, Any]:
     """Google Events via SerpAPI — used as a campus/calendar signal for the demo."""
-    data = await _serpapi_get(
+    data = _serpapi_get(
         {
             "engine": "google_events",
             "q": query or "events near UT Austin",
@@ -183,29 +184,7 @@ async def search_calendar_events(query: str) -> dict[str, Any]:
     return {"source": "serpapi", "engine": "google_events", "results": results[:8]}
 
 
-async def lookup_social(kind: str, handle: str) -> dict[str, Any]:
-    q = f"{kind} {handle}".strip()
-    data = await _serpapi_get({"engine": "google", "q": q})
-    if not data:
-        return {
-            "source": "demo_fallback",
-            "engine": "google",
-            "result": _demo_social(kind, handle),
-        }
-
-    organic = (data.get("organic_results") or [{}])[0]
-    result = {
-        "kind": kind,
-        "handle": handle,
-        "display_name": organic.get("title") or handle,
-        "bio": organic.get("snippet") or "",
-        "profile_url": organic.get("link"),
-        "notes": organic.get("snippet"),
-    }
-    return {"source": "serpapi", "engine": "google", "result": result}
-
-
-async def enrichment_bundle(
+def enrichment_bundle(
     *,
     lat: float | None,
     lng: float | None,
@@ -214,9 +193,9 @@ async def enrichment_bundle(
     social_kind: str,
     social_handle: str,
 ) -> dict[str, Any]:
-    maps = await search_maps(maps_query, lat=lat, lng=lng)
-    calendar = await search_calendar_events(calendar_query)
-    social = await lookup_social(social_kind, social_handle)
+    maps = search_maps(maps_query, lat=lat, lng=lng)
+    calendar = search_calendar_events(calendar_query)
+    social = social_preview(social_kind, social_handle)
     location = {
         "lat": lat,
         "lng": lng,
