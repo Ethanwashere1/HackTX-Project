@@ -131,14 +131,13 @@ def on_member_text_changed(member_ids: list[str]) -> None:
 def schedule_social_lookup(user_id: str, socials: list[dict[str, Any]]) -> None:
     """Hook: the user submitted these social handles ([{kind, value}]).
 
-    Runs as a background task after the response, so it must open its own DB session and must
-    never raise into the caller.
-
-    TODO(SerpAPI builder): look the handles up (cached in social_lookups), write
-    `profiles.social_notes`, then refresh_member_texts(db, user_id). Skip on failure or while
-    SERPAPI_API_KEY is not configured.
+    Runs as a background task after the response: looks the handles up via SerpAPI (cached in
+    social_lookups), writes `profiles.social_notes`, then refresh_member_texts. Opens its own DB
+    session, never raises, and skips on failure or while SERPAPI_API_KEY is not configured.
     """
-    log.debug("user %s: SerpAPI lookup of %d handles not implemented yet", user_id, len(socials))
+    from app.services.socials import lookup_socials  # imported here: socials imports this module
+
+    lookup_socials(user_id, socials)
 
 
 def run_hook(hook: Callable[..., None], *args: Any) -> None:
