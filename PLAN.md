@@ -64,7 +64,7 @@ _Last updated: 2026-10-25 (HackTX weekend). **Pivoted to the new product spec.**
   - **reviewer:** reviews it.
   - **tester:** writes and runs backend tests.
 
-  The backend covers OAuth, orgs, events, join, SerpAPI, embeddings/Snowflake, recommendations proxy, question-suggestions proxy, overview regeneration hooks, requests/consent, chat, calls, team pages, deploy.
+  The backend covers OAuth, orgs, events, join, SerpAPI, embeddings/Snowflake, recommendations, `GET /api/me/profile`, question-suggestions proxy, overview regeneration hooks, requests/consent, chat, calls, team pages, deploy.
 
   The Claude agents never write code in `agents/` or `frontend/`.
 - **Frontend devs (`frontend/`):** all UI (including overview display and quiz-suggest UX), plus all frontend unit/regression tests. Backend tests stay with the Claude tester.
@@ -152,11 +152,10 @@ See [docs/CONTRACT.md](docs/CONTRACT.md) (DRAFT v1.0-pre.5). It covers:
   - pgvector fallback
   - agents `/recommend` rerank with enriched `traits` / `topic_signals` / `group_need` when available, with a similarity-order fallback
   - `people[].summary` prefers profile `overview` over interview `summary`
-- [ ] **M1** (builder) Profile overview wiring — done when join (and later interview/socials) stores overview asynchronously and tests cover agents failure without failing join (depends on: agents `/profile-overview`, schema `overview` column or equivalent):
+- [x] **M1** (builder) Profile overview wiring — done when join (and later interview/socials) stores overview asynchronously and tests cover agents failure without failing join (depends on: agents `/profile-overview`, schema `overview` column or equivalent):
   - `GET /api/me/profile` returns overview, summary, traits, contacts, socials
   - after join / interview-summary / social_notes update: call agents `POST /profile-overview`, persist overview + merged traits, then re-embed
-  - _Agents `/profile-overview` is ready; backend wiring tracked separately._
-- [ ] **M1** (builder) `POST /api/question-suggestions` — done when it proxies to agents `/generate-questions`, validates count/kinds, returns 502 `agents_unavailable` on timeout, and API tests pass (depends on: agents QuizGen). _Agents `/generate-questions` is ready; backend proxy tracked separately._
+- [x] **M1** (builder) `POST /api/question-suggestions` — done when it proxies to agents `/generate-questions`, validates count/kinds, returns 502 `agents_unavailable` on timeout, and API tests pass (depends on: agents QuizGen)
 - [ ] **M1** (builder) Requests and consent — done when no group ever exceeds max_size or group_count and no user exceeds the event's `max_groups_per_user`, including when two accepts arrive at once (depends on: schema):
   - `POST /api/requests` to a user or a group
   - accept/decline

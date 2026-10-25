@@ -107,8 +107,9 @@ def test_join_persists_overview_when_agents_ok(login_as, db, monkeypatch):
     monkeypatch.setattr(profile_svc, "on_member_text_changed", lambda *a, **k: None)
     monkeypatch.setattr(profile_svc, "schedule_social_lookup", lambda *a, **k: None)
 
+    host = login_as("host@x.com", "Host")
+    event_id = create(host, structured())
     c = login_as()
-    event_id = create(c, structured())
     resp = c.post(f"/api/events/{event_id}/join", json=good_join(c, event_id))
     assert resp.status_code == 201, resp.text
 
@@ -128,8 +129,9 @@ def test_join_succeeds_when_overview_agents_fails(login_as, db, monkeypatch):
     monkeypatch.setattr(profile_svc, "on_member_text_changed", lambda *a, **k: None)
     monkeypatch.setattr(profile_svc, "schedule_social_lookup", lambda *a, **k: None)
 
+    host = login_as("host@x.com", "Host")
+    event_id = create(host, structured())
     c = login_as()
-    event_id = create(c, structured())
     profile = profile_svc.get_or_create_profile(db, c.user["user_id"])
     profile.overview = "Prior overview"
     db.add(profile)
@@ -138,7 +140,7 @@ def test_join_succeeds_when_overview_agents_fails(login_as, db, monkeypatch):
     resp = c.post(f"/api/events/{event_id}/join", json=good_join(c, event_id))
     assert resp.status_code == 201, resp.text
     db.expire_all()
-    assert db.exec(select(Profile)).one().overview == "Prior overview"
+    assert db.exec(select(Profile).where(Profile.user_id == c.user["user_id"])).one().overview == "Prior overview"
 
 
 def test_join_succeeds_when_overview_returns_500(login_as, db, monkeypatch):
@@ -150,10 +152,11 @@ def test_join_succeeds_when_overview_returns_500(login_as, db, monkeypatch):
     monkeypatch.setattr(profile_svc, "on_member_text_changed", lambda *a, **k: None)
     monkeypatch.setattr(profile_svc, "schedule_social_lookup", lambda *a, **k: None)
 
+    host = login_as("host@x.com", "Host")
+    event_id = create(host, structured())
     c = login_as()
-    event_id = create(c, structured())
     assert c.post(f"/api/events/{event_id}/join", json=good_join(c, event_id)).status_code == 201
-    assert db.exec(select(Profile)).one().overview is None
+    assert db.exec(select(Profile).where(Profile.user_id == c.user["user_id"])).one().overview is None
 
 
 # --- POST /api/question-suggestions --------------------------------------------------------------
