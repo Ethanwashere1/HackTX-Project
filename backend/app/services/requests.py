@@ -6,6 +6,7 @@ this order: the event row (group_count, and it serializes accepts within the eve
 group row (max_size), both users' event_members rows in id order (max_groups_per_user), then the
 request row. Limits are re-checked only after the locks are held. Leaving a group locks the group
 row first too, and decline/cancel lock only the request row, so the lock order never inverts.
+An informal accept also locks the pair's other pending requests last, to accept them with it.
 """
 
 from dataclasses import dataclass, field
@@ -216,7 +217,7 @@ def _accept_locked(db: Session, req: Request, user: User) -> Request:
         raise AppError(403, "forbidden", "Only the recipient can accept this request")
 
     if event.type == "informal":
-        _connect(db, event, req)
+        _connect(db, event, req, user)
     elif group is None:
         _form_group(db, event, req)
     else:
@@ -280,14 +281,35 @@ def _join_group(db: Session, event: Event, group: Group, req: Request) -> None:
     req.group_id = group.id
 
 
-def _connect(db: Session, event: Event, req: Request) -> None:
-    if _connection_between(db, event.id, req.sender_id, req.target_user_id):
-        raise AppError(409, "already_connected", "You're already connected")
-    a, b = sorted((req.sender_id, req.target_user_id))
-    con = Connection(event_id=event.id, user_a_id=a, user_b_id=b, thread_id=req.thread_id)
-    db.add(con)
-    db.flush()
+def _connect(db: Session, event: Event, req: Request, user: User) -> None:
+    """Connect the pair once. Both users have consented, so any other pending request between them
+    (the crossing one they sent each other) is accepted with the same connection. If a connection
+    already exists (a request sent while another accept was committing), it is reused."""
+    con = _connection_between(db, event.id, req.sender_id, req.target_user_id)
+    if con is None:
+        a, b = sorted((req.sender_id, req.target_user_id))
+        con = Connection(event_id=event.id, user_a_id=a, user_b_id=b, thread_id=req.thread_id)
+        db.add(con)
+        db.flush()
     req.connection_id = con.id
+    pair = (req.sender_id, req.target_user_id)
+    for other in db.exec(
+        select(Request)
+        .where(
+            Request.event_id == event.id,
+            Request.status == "pending",
+            Request.id != req.id,
+            Request.sender_id.in_(pair),
+            Request.target_user_id.in_(pair),
+            Request.sender_id != Request.target_user_id,
+        )
+        .order_by(Request.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    ).all():
+        _decide(other, user, "accepted")
+        other.connection_id = con.id
+        db.add(other)
 
 
 def decline_request(db: Session, request_id: str, user: User) -> Request:
