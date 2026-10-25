@@ -64,7 +64,7 @@ _Last updated: 2026-10-25 (HackTX weekend). **Pivoted to the new product spec.**
   - **reviewer:** reviews it.
   - **tester:** writes and runs backend tests.
 
-  The backend covers OAuth, orgs, events, join, SerpAPI, embeddings/Snowflake, recommendations proxy, question-suggestions proxy, overview regeneration hooks, requests/consent, chat, calls, team pages, deploy.
+  The backend covers OAuth, orgs, events, join, SerpAPI, embeddings/Snowflake, recommendations, requests/consent, chat, calls, team pages, deploy. **Still open (M1 builder):** `GET /api/me/profile`, `POST /api/question-suggestions` proxy, overview regeneration hooks, and enriched recommend payload — agents endpoints exist; wiring is not done on this branch.
 
   The Claude agents never write code in `agents/` or `frontend/`.
 - **Frontend devs (`frontend/`):** all UI (including overview display and quiz-suggest UX), plus all frontend unit/regression tests. Backend tests stay with the Claude tester.
@@ -126,7 +126,7 @@ See [docs/CONTRACT.md](docs/CONTRACT.md) (DRAFT v1.0-pre.5). It covers:
   - streams audio both ways and emits transcripts
 - [ ] **M2** Text mode on the same socket (`input=text`) — done when a typed interview completes (depends on: Interviewer)
 - [ ] **M2** Summarizer agent: transcript → summary + traits, POSTed to `/internal/.../summary` — done when the summary shows on the profile and overview regen runs (depends on: backend endpoint + overview hook)
-- [ ] **M2.5** Agents test suite expanded for overview, quizgen, enriched recommend, interview WS (mocked Gemini) — done when `cd agents && uv run pytest -q` is green without a live key (depends on: M1 agent endpoints)
+- [x] **M2.5** Agents test suite expanded for overview, quizgen, enriched recommend, interview WS (mocked Gemini) — done when `cd agents && uv run pytest -q` is green without a live key (depends on: M1 agent endpoints). _Green on this branch; overview/quizgen/enriched recommend covered in `test_http.py`; interview WS tests unchanged._
 - [ ] **M4** Latency tuning, end-of-interview detection, reconnect handling — done when 3 back-to-back interviews succeed
 
 ### AI swarm (lead scaffolds; Gemini uses for QA) — `ai-swarm/`
