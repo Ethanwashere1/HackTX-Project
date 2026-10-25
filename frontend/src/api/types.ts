@@ -42,6 +42,8 @@ export type Profile = {
   user_id: string;
   name: string;
   email: string;
+  /** AI-written profile overview (regenerated after joins / interviews); null until one exists. */
+  overview?: string | null;
   summary: string | null;
   /** Any JSON object; the agents currently send `{"highlights": [...]}`. */
   traits: Record<string, unknown> | null;
@@ -138,6 +140,21 @@ export type CreateEventBody = {
 };
 
 export type CreateEventResult = { event_id: string; share_url: string };
+
+/** POST /api/question-suggestions body (host AI assist; does not create an event). */
+export type QuestionSuggestionsBody = {
+  name: string;
+  type: EventType;
+  tone: Tone;
+  description?: string;
+  /** Valid QuestionIn shapes only: choice kinds need options, other kinds must send null. */
+  existing_questions?: QuestionIn[];
+  /** 1..10, default 3. */
+  count?: number;
+  hint?: string | null;
+};
+
+export type QuestionSuggestionsResult = { questions: QuestionIn[] };
 
 export type EventDetail = {
   event_id: string;
@@ -289,6 +306,8 @@ export type GroupPage = {
   event_id: string;
   name: string;
   thread_id: string | null;
+  /** Earliest member — treated as the squad owner/founder. */
+  owner_user_id?: string | null;
   members: GroupMember[];
 };
 
@@ -317,3 +336,53 @@ export type InterviewServerMessage =
   | { type: "interrupted" }
   | { type: "interview_complete"; summary_saved: boolean; summary: string | null }
   | { type: "error"; code: string; message: string };
+
+// --- Enrichment (SerpAPI) ------------------------------------------------------------------------
+
+export type EnrichmentPlace = {
+  title: string;
+  address?: string | null;
+  rating?: number | null;
+  type?: string | null;
+  maps_url?: string | null;
+};
+
+export type EnrichmentEvent = {
+  title: string;
+  date?: string | null;
+  venue?: string | null;
+  link?: string | null;
+};
+
+export type EnrichmentSocial = {
+  kind: string;
+  handle: string;
+  display_name?: string | null;
+  bio?: string | null;
+  profile_url?: string | null;
+  notes?: string | null;
+};
+
+/** GET /api/enrichment/context. `source` is "serpapi" or "demo_fallback". */
+export type EnrichmentContext = {
+  location: {
+    lat: number | null;
+    lng: number | null;
+    label: string;
+    fallback_lat: number;
+    fallback_lng: number;
+  };
+  maps: { source: string; engine: string; results: EnrichmentPlace[] };
+  calendar: { source: string; engine: string; results: EnrichmentEvent[] };
+  social: { source: string; engine: string; result: EnrichmentSocial };
+  serpapi_configured: boolean;
+};
+
+export type EnrichmentQuery = {
+  lat?: number | null;
+  lng?: number | null;
+  maps_q?: string;
+  calendar_q?: string;
+  social_kind?: string;
+  social_handle?: string;
+};

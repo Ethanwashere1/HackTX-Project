@@ -121,7 +121,7 @@ export function RecommendationsPage() {
   return (
     <div className="su-page su-fade-up">
       <h1 className="su-page-title">
-        {structured ? "People and group recommendations" : "People to connect with"}
+        {structured ? "People and squad recommendations" : "People to connect with"}
       </h1>
       <p className="su-page-sub">
         {event.name} · {rankedCopy}. Send a request — both sides must accept.
@@ -131,22 +131,22 @@ export function RecommendationsPage() {
 
       {atGroupLimit ? (
         <article className="su-card" style={{ padding: "1.2rem", maxWidth: 720 }}>
-          <span className="su-badge su-badge-warm">You're in a team</span>
+          <span className="su-badge su-badge-warm">You're in a squad</span>
           <h3 style={{ margin: "0.75rem 0 0.25rem" }}>You've already got your squad</h3>
           <p style={{ color: "var(--su-text-muted)" }}>
-            This event allows {event.max_groups_per_user ?? 1} group
+            This event allows {event.max_groups_per_user ?? 1} squad
             {(event.max_groups_per_user ?? 1) > 1 ? "s" : ""} per person, so there's nothing more to
             request here.
           </p>
           <Link className="su-btn su-btn-primary" to={`/groups/${groupId}`}>
-            Open your team →
+            Open your squad →
           </Link>
         </article>
       ) : (
         <>
           {allGroupsFormed ? (
             <p className="su-badge su-badge-soft" style={{ marginBottom: "1rem" }}>
-              All {event.group_count} groups have formed, so only open groups are listed.
+              All {event.group_count} squads have formed, so only open squads are listed.
             </p>
           ) : null}
           {empty ? (
@@ -161,7 +161,7 @@ export function RecommendationsPage() {
 
           {data.groups.length ? (
             <>
-              <h3>Open groups</h3>
+              <h3>Open squads</h3>
               <div className="su-grid-2" style={{ marginBottom: "1.5rem" }}>
                 {data.groups.map((g) => (
                   <GroupCard
@@ -184,7 +184,7 @@ export function RecommendationsPage() {
                     key={p.user_id}
                     person={p}
                     busy={busyId === p.user_id}
-                    label={structured ? "Request to team up" : "Request to connect"}
+                    label={structured ? "Request to squad up" : "Request to connect"}
                     onRequest={() => void request({ type: "user", id: p.user_id })}
                   />
                 ))}
@@ -279,7 +279,7 @@ function GroupCard({
   return (
     <article className="su-card" style={{ padding: "1.2rem" }}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem" }}>
-        <span className="su-badge su-badge-warm">group</span>
+        <span className="su-badge su-badge-warm">squad</span>
         <MatchScore score={group.score} />
       </div>
       <h3 style={{ margin: "0.75rem 0 0.25rem" }}>{group.name}</h3>

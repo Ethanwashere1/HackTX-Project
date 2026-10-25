@@ -18,7 +18,7 @@ export function GroupPageView() {
       .getGroup(groupId)
       .then((g) => {
         setGroup(g);
-        // The team page body has only event_id; the name is a nicety.
+        // The squad page body has only event_id; the name is a nicety.
         return api.getEvent(g.event_id).then((e) => setEventName(e.name)).catch(() => undefined);
       })
       .catch((e: unknown) => setError(errorMessage(e)));
@@ -38,6 +38,7 @@ export function GroupPageView() {
       </h1>
       <p className="su-page-sub">
         {eventName ?? "Event"} · {group.members.length} members · contacts visible to members only
+        {owner ? ` · Owner: ${owner.name ?? "Member"}${isOwner ? " (you)" : ""}` : ""}
       </p>
       {isOwner ? (
         <p style={{ color: "var(--su-text-muted)", marginTop: "-0.5rem" }}>
@@ -48,7 +49,7 @@ export function GroupPageView() {
       <div style={{ display: "flex", gap: "0.75rem", marginBottom: "1.25rem", flexWrap: "wrap" }}>
         {group.thread_id ? (
           <Link className="su-btn su-btn-primary" to={`/threads/${group.thread_id}`}>
-            Open team chat
+            Open squad chat
           </Link>
         ) : null}
         <Link className="su-btn su-btn-secondary" to={`/events/${group.event_id}`}>
@@ -62,7 +63,14 @@ export function GroupPageView() {
             <div style={{ display: "flex", gap: "0.75rem", alignItems: "center" }}>
               <Avatar name={m.name ?? "?"} size={44} />
               <div>
-                <h3 style={{ margin: 0 }}>{m.name ?? "Member"}</h3>
+                <h3 style={{ margin: 0 }}>
+                  {m.name ?? "Member"}
+                  {m.user_id === group.owner_user_id ? (
+                    <span className="su-badge su-badge-warm" style={{ marginLeft: "0.5rem" }}>
+                      Owner
+                    </span>
+                  ) : null}
+                </h3>
                 {m.user_id === me?.user_id ? (
                   <p style={{ margin: 0, color: "var(--su-text-muted)", fontSize: "0.85rem" }}>You</p>
                 ) : null}

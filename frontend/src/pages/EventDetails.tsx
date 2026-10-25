@@ -8,6 +8,7 @@ import { useAuth } from "../auth/AuthContext";
 
 export function EventDetailsPage() {
   const { eventId = "" } = useParams();
+  const { me } = useAuth();
   const [event, setEvent] = useState<EventDetail | null>(null);
   const [error, setError] = useState<{ code: string | null; message: string } | null>(null);
 
@@ -39,11 +40,12 @@ export function EventDetailsPage() {
   const joined = Boolean(event.my_membership);
   const groupId = event.my_membership?.group_id ?? null;
   const structured = event.type === "structured";
+  const isHost = Boolean(me && event.host.user_id === me.user_id);
 
   return (
     <div className="su-page su-fade-up">
       <span className={`su-badge ${structured ? "su-badge-warm" : "su-badge-teal"}`}>
-        {structured ? "Team event" : "1:1 connection"}
+        {structured ? "Squad event" : "1:1 connection"}
       </span>
       <h1 className="su-page-title" style={{ marginTop: "0.75rem" }}>
         {event.name}
@@ -63,14 +65,14 @@ export function EventDetailsPage() {
             <li>
               Members: {event.stats.member_count}
               {structured
-                ? ` · Groups formed: ${event.stats.groups_formed}/${event.group_count}`
+                ? ` · Squads formed: ${event.stats.groups_formed}/${event.group_count}`
                 : null}
             </li>
             {structured ? (
               <li>
-                Group size {event.min_size}–{event.max_size}
+                Squad size {event.min_size}–{event.max_size}
                 {event.max_groups_per_user && event.max_groups_per_user > 1
-                  ? ` · up to ${event.max_groups_per_user} groups each`
+                  ? ` · up to ${event.max_groups_per_user} squads each`
                   : null}
               </li>
             ) : null}
@@ -91,7 +93,7 @@ export function EventDetailsPage() {
               <>
                 {groupId ? (
                   <Link className="su-btn su-btn-primary" to={`/groups/${groupId}`}>
-                    Open your team
+                    Open your squad
                   </Link>
                 ) : null}
                 <Link

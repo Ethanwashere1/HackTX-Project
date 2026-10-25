@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api/client";
 import { ApiError, errorMessage } from "../api/errors";
 import type { AnswerValue, Contact, ContactKind, EventDetail, FieldValue, Question } from "../api/types";
+import { useAuth } from "../auth/AuthContext";
 
 const SOCIAL_KINDS: { kind: ContactKind; label: string; placeholder: string }[] = [
   { kind: "github", label: "GitHub", placeholder: "username" },
@@ -95,6 +96,22 @@ export function JoinEventPage() {
   }
 
   if (!event) return <div className="su-page">{error ?? "Loading…"}</div>;
+
+  const isHost = Boolean(me && event.host.user_id === me.user_id);
+  if (isHost) {
+    return (
+      <div className="su-page su-fade-up">
+        <h1 className="su-page-title">You’re the host</h1>
+        <p className="su-page-sub">
+          Hosts own this event and can’t join it as a participant. Share the link so others can join
+          and form squads.
+        </p>
+        <Link className="su-btn su-btn-primary" to={`/events/${event.event_id}`}>
+          Back to event
+        </Link>
+      </div>
+    );
+  }
 
   if (event.my_membership) {
     return (

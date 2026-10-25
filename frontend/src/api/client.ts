@@ -8,6 +8,8 @@ import type {
   CreateOrgBody,
   CreateRequestBody,
   CreateRequestResult,
+  EnrichmentContext,
+  EnrichmentQuery,
   EventDetail,
   GroupPage,
   InterviewStart,
@@ -21,6 +23,8 @@ import type {
   Org,
   OrgFeed,
   Profile,
+  QuestionSuggestionsBody,
+  QuestionSuggestionsResult,
   RecommendationsResponse,
   RequestBox,
   RequestDecision,
@@ -153,6 +157,11 @@ export const realApi = {
     return post("/api/events", body);
   },
 
+  /** AI-drafted questionnaire questions for the Create event form. */
+  suggestQuestions(body: QuestionSuggestionsBody): Promise<QuestionSuggestionsResult> {
+    return post("/api/question-suggestions", body);
+  },
+
   joinEvent(eventId: string, body: JoinEventBody): Promise<JoinEventResult> {
     return post(`/api/events/${q(eventId)}/join`, body);
   },
@@ -214,6 +223,20 @@ export const realApi = {
   // --- groups ---
   getGroup(groupId: string): Promise<GroupPage> {
     return request<GroupPage>(`/api/groups/${q(groupId)}`);
+  },
+
+  // --- enrichment ---
+  /** SerpAPI-backed Maps, Events (calendar) and social lookup near the browser's location. */
+  enrichmentContext(opts: EnrichmentQuery = {}): Promise<EnrichmentContext> {
+    const params = new URLSearchParams();
+    if (opts.lat != null) params.set("lat", String(opts.lat));
+    if (opts.lng != null) params.set("lng", String(opts.lng));
+    if (opts.maps_q) params.set("maps_q", opts.maps_q);
+    if (opts.calendar_q) params.set("calendar_q", opts.calendar_q);
+    if (opts.social_kind) params.set("social_kind", opts.social_kind);
+    if (opts.social_handle) params.set("social_handle", opts.social_handle);
+    const qs = params.toString();
+    return request<EnrichmentContext>(`/api/enrichment/context${qs ? `?${qs}` : ""}`);
   },
 };
 

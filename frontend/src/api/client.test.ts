@@ -30,7 +30,41 @@ describe("api client (mocks)", () => {
     await api.joinEvent("evt_hacktx", { answers: [], fields: {}, socials: [] });
     const recs = await api.recommendations("evt_hacktx");
     expect(recs.ranked_by).toBe("gemini");
-    expect(recs.groups[0]?.name).toBe("Team Neural");
-    expect(recs.people.length).toBeGreaterThan(0);
+    expect(recs.groups[0]?.name).toBe("Squad Neural");
+    expect(recs.people.map((p) => p.name)).toContain("Ben Li");
+    // Own squad (Squad Pixel) is never recommended for re-join
+    expect(recs.groups.map((g) => g.group_id)).not.toContain("grp_pixel");
+  });
+
+  it("returns the AI profile overview", async () => {
+    await api.devLogin(SEED_USERS[0]);
+    const profile = await api.getProfile();
+    expect(profile.overview).toMatch(/builder/i);
+  });
+
+  it("suggests valid questionnaire questions, skipping existing ones", async () => {
+    await api.devLogin(SEED_USERS[0]);
+    const res = await api.suggestQuestions({
+      name: "HackTX",
+      type: "structured",
+      tone: "casual",
+      existing_questions: [
+        { text: "Describe a project you're proud of.", kind: "text", options: null, required: false },
+      ],
+      count: 2,
+    });
+    expect(res.questions).toHaveLength(2);
+    expect(res.questions.map((qn) => qn.text)).not.toContain("Describe a project you're proud of.");
+    for (const qn of res.questions) {
+      const choice = qn.kind === "single_choice" || qn.kind === "multi_choice";
+      if (choice) expect(qn.options?.length).toBeGreaterThan(0);
+      else expect(qn.options).toBeNull();
+    }
+  });
+
+  it("marks the squad owner on the squad page", async () => {
+    await api.devLogin(SEED_USERS[0]);
+    const group = await api.getGroup("grp_pixel");
+    expect(group.owner_user_id).toBe(group.members[0]?.user_id);
   });
 });

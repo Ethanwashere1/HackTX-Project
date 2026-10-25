@@ -2,10 +2,50 @@ import { useState, type FormEvent } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import { errorMessage } from "../api/errors";
-import type { CreateEventBody, EventType, QuestionKind, Tone } from "../api/types";
+import type { CreateEventBody, EventType, QuestionIn, QuestionKind, Tone } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
 
 type DraftQ = { text: string; kind: QuestionKind; options: string; required: boolean };
+
+const EMPTY_Q: DraftQ = { text: "", kind: "text", options: "", required: false };
+
+const DEFAULT_QUESTIONS: DraftQ[] = [
+  {
+    text: "What role do you want?",
+    kind: "single_choice",
+    options: "frontend, backend, design, ml",
+    required: true,
+  },
+  { text: "What do you want to build?", kind: "text", options: "", required: false },
+  {
+    text: "Weekend energy?",
+    kind: "single_choice",
+    options: "chill builder, competitive, explore & learn",
+    required: true,
+  },
+];
+
+const MAX_QUESTIONS = 30;
+
+function resizeQuestions(current: DraftQ[], count: number): DraftQ[] {
+  const n = Math.max(0, Math.min(MAX_QUESTIONS, Math.floor(count)));
+  if (n === current.length) return current;
+  if (n < current.length) return current.slice(0, n);
+  return [...current, ...Array.from({ length: n - current.length }, () => ({ ...EMPTY_Q }))];
+}
+
+const isChoice = (kind: QuestionKind) => kind === "single_choice" || kind === "multi_choice";
+
+/** A filled-in draft as the contract's QuestionIn, or null if it isn't valid yet. */
+function toQuestionIn(q: DraftQ): QuestionIn | null {
+  const text = q.text.trim();
+  if (!text) return null;
+  const options = isChoice(q.kind)
+    ? [...new Set(q.options.split(",").map((s) => s.trim()).filter(Boolean))]
+    : null;
+  if (options && options.length === 0) return null;
+  return { text, kind: q.kind, required: q.required, options };
+}
 
 /** "Experience level, skills" -> ["experience_level", "skills"] (contract: ^[a-z][a-z0-9_]{0,49}$). */
 function fieldKeys(raw: string): string[] {
@@ -22,8 +62,8 @@ export function CreateEventPage() {
   const [params] = useSearchParams();
   const myOrgs = me?.orgs ?? [];
   const [orgId, setOrgId] = useState<string>(params.get("org") ?? myOrgs[0]?.org_id ?? "");
-  const [name, setName] = useState("HackTX team-up");
-  const [description, setDescription] = useState("Find your hackathon team");
+  const [name, setName] = useState("HackTX squad-up");
+  const [description, setDescription] = useState("Find your hackathon squad");
   const [type, setType] = useState<EventType>("structured");
   const [tone, setTone] = useState<Tone>("casual");
   const [groupCount, setGroupCount] = useState(6);
@@ -36,6 +76,49 @@ export function CreateEventPage() {
   const [questions, setQuestions] = useState<DraftQ[]>(DEFAULT_QUESTIONS);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [hint, setHint] = useState("");
+  const [suggesting, setSuggesting] = useState(false);
+  const [suggestError, setSuggestError] = useState<string | null>(null);
+
+  /** POST /api/question-suggestions: AI drafts that get appended to the editable list. */
+  async function suggestQuestions() {
+    setSuggesting(true);
+    setSuggestError(null);
+    try {
+      const room = MAX_QUESTIONS - questions.length;
+      if (room <= 0) throw new Error(`You already have the maximum of ${MAX_QUESTIONS} questions.`);
+      const res = await api.suggestQuestions({
+        name: name.trim() || "Untitled event",
+        type,
+        tone,
+        description,
+        existing_questions: questions.map(toQuestionIn).filter((x): x is QuestionIn => x !== null),
+        count: Math.min(3, room),
+        hint: hint.trim() || null,
+      });
+      if (res.questions.length === 0) throw new Error("No suggestions came back — try a hint.");
+      // Fill blank slots first, then append.
+      const drafts: DraftQ[] = res.questions.map((sq) => ({
+        text: sq.text,
+        kind: sq.kind,
+        options: (sq.options ?? []).join(", "),
+        required: sq.required,
+      }));
+      setQuestions((prev) => {
+        const next = [...prev];
+        for (const d of drafts) {
+          const blank = next.findIndex((x) => !x.text.trim());
+          if (blank >= 0) next[blank] = d;
+          else if (next.length < MAX_QUESTIONS) next.push(d);
+        }
+        return next;
+      });
+    } catch (err) {
+      setSuggestError(errorMessage(err, "Couldn't get suggestions"));
+    } finally {
+      setSuggesting(false);
+    }
+  }
 
   function setQuestionCount(count: number) {
     setQuestions((prev) => resizeQuestions(prev, count));
@@ -46,6 +129,10 @@ export function CreateEventPage() {
     setBusy(true);
     setError(null);
     try {
+      const filled = questions.filter((q) => q.text.trim());
+      if (filled.length === 0) {
+        throw new Error("Add at least one question (or set the count above zero).");
+      }
       const body: CreateEventBody = {
         name,
         description,
@@ -53,17 +140,14 @@ export function CreateEventPage() {
         tone,
         interview_enabled: interview,
         required_fields: fieldKeys(requiredFields),
-        questions: questions
-          .filter((q) => q.text.trim())
-          .map((q) => ({
-            text: q.text.trim(),
-            kind: q.kind,
-            required: q.required,
-            options:
-              q.kind === "single_choice" || q.kind === "multi_choice"
-                ? [...new Set(q.options.split(",").map((s) => s.trim()).filter(Boolean))]
-                : null,
-          })),
+        questions: filled.map((q) => ({
+          text: q.text.trim(),
+          kind: q.kind,
+          required: q.required,
+          options: isChoice(q.kind)
+            ? [...new Set(q.options.split(",").map((s) => s.trim()).filter(Boolean))]
+            : null,
+        })),
       };
       // Without an org the event is unlisted and reachable by link only.
       if (orgId) body.org_id = orgId;
@@ -154,7 +238,7 @@ export function CreateEventPage() {
         {type === "structured" ? (
           <div className="su-grid-2">
             <div className="su-field">
-              <label className="su-label">Max groups per person</label>
+              <label className="su-label">Max squads per person</label>
               <input
                 className="su-input"
                 type="number"
@@ -164,7 +248,7 @@ export function CreateEventPage() {
               />
             </div>
             <div className="su-field">
-              <label className="su-label">Group count</label>
+              <label className="su-label">Squad count</label>
               <input
                 className="su-input"
                 type="number"
@@ -256,6 +340,36 @@ export function CreateEventPage() {
         <p style={{ margin: "0.35rem 0 1rem", color: "var(--su-text-muted)", fontSize: "0.85rem" }}>
           Set how many questions joiners answer (0–{MAX_QUESTIONS}). Add, remove, or edit each one below.
         </p>
+
+        <div
+          className="su-card"
+          style={{ padding: "0.9rem", marginBottom: "0.75rem", boxShadow: "none" }}
+          aria-label="AI question suggestions"
+        >
+          <div className="su-field" style={{ marginBottom: "0.6rem" }}>
+            <label className="su-label" htmlFor="q-hint">
+              Ask AI for questions (optional hint)
+            </label>
+            <input
+              id="q-hint"
+              className="su-input"
+              value={hint}
+              placeholder="e.g. focus on availability and project ideas"
+              onChange={(e) => setHint(e.target.value)}
+            />
+          </div>
+          <button
+            type="button"
+            className="su-btn su-btn-secondary"
+            disabled={suggesting || questions.length >= MAX_QUESTIONS}
+            onClick={() => void suggestQuestions()}
+          >
+            {suggesting ? "Thinking…" : "✨ Suggest questions"}
+          </button>
+          {suggestError ? (
+            <p style={{ color: "var(--su-danger)", margin: "0.5rem 0 0" }}>{suggestError}</p>
+          ) : null}
+        </div>
 
         {questions.map((q, i) => (
           <div key={i} className="su-card" style={{ padding: "0.9rem", marginBottom: "0.75rem", boxShadow: "none" }}>

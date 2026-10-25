@@ -1,12 +1,12 @@
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import App from "../App";
-import { api } from "../api/client";
-import { mockEvents, mockMe } from "../demo";
+import { api, SEED_USERS } from "../api/client";
+import { mockEvents, mockMe } from "../api/mocks";
 
 describe("Host cannot join own event", () => {
   beforeEach(async () => {
-    await api.devLogin();
+    await api.devLogin(SEED_USERS[0]);
     // Make the signed-in user the host of the demo HackTX event
     mockEvents.evt_hacktx.host = { user_id: mockMe.user_id, name: mockMe.name };
     mockEvents.evt_hacktx.my_membership = null;
@@ -15,7 +15,7 @@ describe("Host cannot join own event", () => {
 
   afterEach(() => {
     cleanup();
-    mockEvents.evt_hacktx.host = { user_id: "usr_elena", name: "Elena Brooks" };
+    mockEvents.evt_hacktx.host = { user_id: "usr_morgan", name: "Morgan Reyes" };
   });
 
   it("hides Join and explains host ownership", async () => {

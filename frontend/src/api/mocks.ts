@@ -4,6 +4,7 @@ import type { Api, InterviewSocket, SeedUser } from "./client";
 import { ApiError } from "./errors";
 import type {
   Connection,
+  EnrichmentContext,
   EventDetail,
   GroupPage,
   InterviewServerMessage,
@@ -13,6 +14,7 @@ import type {
   Org,
   OrgFeedEvent,
   Profile,
+  QuestionIn,
   RecommendationsResponse,
   RequestItem,
   ThreadInfo,
@@ -87,12 +89,12 @@ const baseEvent = {
   my_membership: null,
 };
 
-const mockEvents: Record<string, EventDetail> = {
+export const mockEvents: Record<string, EventDetail> = {
   evt_hacktx: {
     ...baseEvent,
     event_id: "evt_hacktx",
-    name: "HackTX team-up",
-    description: "Find your hackathon team. Mutual consent before anything forms.",
+    name: "HackTX squad-up",
+    description: "Find your hackathon squad. Mutual consent before anything forms.",
     type: "structured",
     tone: "casual",
     group_count: 6,
@@ -126,7 +128,7 @@ const mockEvents: Record<string, EventDetail> = {
     ...baseEvent,
     event_id: "evt_study",
     name: "Study buddies",
-    description: "1:1 connections for studying, no groups.",
+    description: "1:1 connections for studying, no squads.",
     type: "informal",
     tone: "casual",
     group_count: null,
@@ -177,7 +179,7 @@ const people: RecommendationsResponse["people"] = [
 const groups: RecommendationsResponse["groups"] = [
   {
     group_id: "grp_neural",
-    name: "Team Neural",
+    name: "Squad Neural",
     size: 2,
     max_size: 4,
     members: [
@@ -205,7 +207,7 @@ const mockGroups: Record<string, GroupPage> = {
   grp_pixel: {
     group_id: "grp_pixel",
     event_id: "evt_hacktx",
-    name: "Team Pixel",
+    name: "Squad Pixel",
     thread_id: "thr_g1",
     members: [
       {
@@ -236,7 +238,7 @@ let mockRequests: RequestItem[] = [
     target_type: "user",
     target: { user_id: "usr_maya", name: "Maya Chen" },
     other_party: { type: "user", id: "usr_ben", name: "Ben Li" },
-    message: "Want to team up? I can cover the backend.",
+    message: "Want to squad up? I can cover the backend.",
     status: "pending",
     thread_id: "thr_1",
     group_id: null,
@@ -250,8 +252,8 @@ let mockRequests: RequestItem[] = [
     direction: "outgoing",
     sender: { user_id: "usr_maya", name: "Maya Chen" },
     target_type: "group",
-    target: { group_id: "grp_neural", name: "Team Neural" },
-    other_party: { type: "group", id: "grp_neural", name: "Team Neural" },
+    target: { group_id: "grp_neural", name: "Squad Neural" },
+    other_party: { type: "group", id: "grp_neural", name: "Squad Neural" },
     message: "I'd love to do the frontend for you.",
     status: "pending",
     thread_id: "thr_2",
@@ -278,7 +280,7 @@ const mockThreads: Record<string, ThreadInfo> = {
   thr_2: {
     thread_id: "thr_2",
     kind: "request",
-    title: "Team Neural",
+    title: "Squad Neural",
     event_id: "evt_hacktx",
     group_id: "grp_neural",
     request_id: "req_2",
@@ -291,7 +293,7 @@ const mockThreads: Record<string, ThreadInfo> = {
   thr_g1: {
     thread_id: "thr_g1",
     kind: "group",
-    title: "Team Pixel",
+    title: "Squad Pixel",
     event_id: "evt_hacktx",
     group_id: "grp_pixel",
     request_id: null,
@@ -330,7 +332,10 @@ const mockProfile = (): Profile => ({
   user_id: mockMe.user_id,
   name: mockMe.name,
   email: mockMe.email,
-  summary: "Frontend-focused builder who loves climate apps; wants a chill but ambitious team.",
+  overview:
+    "Maya is a frontend-leaning builder at UT Austin who gravitates to climate and campus-tools " +
+    "ideas. She pairs well with backend or ML folks and wants an ambitious but friendly weekend.",
+  summary: "Frontend-focused builder who loves climate apps; wants a chill but ambitious squad.",
   traits: { highlights: ["pairing", "wants to win", "free all weekend"] },
   socials: [{ kind: "github", value: "mayachen" }],
   contacts: clone(mockMe.contacts),
@@ -396,13 +401,13 @@ class MockInterviewSocket implements InterviewSocket {
           final: true,
         }),
       );
-      this.reply("Nice. What kind of teammates help you do your best work?");
+      this.reply("Nice. What kind of squadmates help you do your best work?");
     } else if (msg.type === "end") {
       this.later(600, () => {
         this.emit({
           type: "interview_complete",
           summary_saved: true,
-          summary: "Frontend builder into climate and campus tools; wants a chill but ambitious team.",
+          summary: "Frontend builder into climate and campus tools; wants a chill but ambitious squad.",
         });
         this.close();
       });
@@ -513,8 +518,50 @@ export const mockApi: Api = {
     };
     return delay({ event_id, share_url: mockEvents[event_id].share_url });
   },
+  async suggestQuestions(body) {
+    const existing = new Set((body.existing_questions ?? []).map((qn) => qn.text.toLowerCase()));
+    const pool: QuestionIn[] = [
+      {
+        text: body.type === "structured" ? "What role would you take on a squad?" : "What do you want to get out of a 1:1?",
+        kind: "single_choice",
+        options:
+          body.type === "structured"
+            ? ["frontend", "backend", "design", "ml", "product"]
+            : ["study partner", "mentor", "new friend", "project buddy"],
+        required: true,
+      },
+      { text: "Describe a project you're proud of.", kind: "text", options: null, required: false },
+      {
+        text: "Which topics excite you most?",
+        kind: "multi_choice",
+        options: ["AI", "Climate", "Health", "Education", "Fintech"],
+        required: false,
+      },
+      { text: "How many hours can you commit?", kind: "number", options: null, required: false },
+      {
+        text: body.tone === "professional" ? "What's your experience level?" : "What's your vibe this weekend?",
+        kind: "single_choice",
+        options:
+          body.tone === "professional"
+            ? ["beginner", "intermediate", "advanced"]
+            : ["chill builder", "competitive", "explore & learn"],
+        required: false,
+      },
+    ];
+    const questions = pool
+      .filter((qn) => !existing.has(qn.text.toLowerCase()))
+      .slice(0, body.count ?? 3);
+    return delay({ questions: clone(questions) }, 300);
+  },
   async joinEvent(eventId) {
     const evt = eventOr404(eventId);
+    if (evt.host.user_id === mockMe.user_id) {
+      throw new ApiError(
+        403,
+        "is_host",
+        "You're the host of this event — hosts manage the event and can't join as a participant",
+      );
+    }
     if (evt.my_membership) throw new ApiError(409, "already_joined", "You already joined this event");
     evt.my_membership = { joined_at: now(), group_id: null };
     evt.stats.member_count += 1;
@@ -556,6 +603,13 @@ export const mockApi: Api = {
 
   async createRequest(body) {
     const evt = eventOr404(body.event_id);
+    if (body.target_type === "group" && evt.my_membership?.group_id === body.target_id) {
+      throw new ApiError(
+        409,
+        "already_in_group",
+        "You're already in this squad — owners and members can't join again",
+      );
+    }
     const request_id = `req_${mockRequests.length + 10}`;
     const thread_id = `thr_${request_id}`;
     const targetName =
@@ -652,6 +706,101 @@ export const mockApi: Api = {
         contacts: clone(mockMe.contacts),
       });
     }
+    // The earliest member is the squad owner.
+    withMe.owner_user_id = withMe.members[0]?.user_id ?? null;
     return delay(withMe);
   },
+
+  async enrichmentContext(opts = {}) {
+    const ctx = clone(demoEnrichment);
+    if (opts.lat != null && opts.lng != null) {
+      ctx.location = { ...ctx.location, lat: opts.lat, lng: opts.lng, label: "Browser geolocation" };
+    }
+    if (opts.social_kind || opts.social_handle) {
+      const kind = opts.social_kind ?? ctx.social.result.kind;
+      const handle = opts.social_handle ?? ctx.social.result.handle;
+      ctx.social.result = {
+        ...ctx.social.result,
+        kind,
+        handle,
+        profile_url: `https://${kind}.com/${handle.replace(/^@/, "")}`,
+      };
+    }
+    return delay(ctx);
+  },
+};
+
+/** SerpAPI-shaped demo payload, matching the backend's `demo_fallback` when no key is set. */
+const demoEnrichment: EnrichmentContext = {
+  location: {
+    lat: null,
+    lng: null,
+    label: "Default · UT Austin campus",
+    fallback_lat: 30.2849,
+    fallback_lng: -97.7341,
+  },
+  maps: {
+    source: "demo_fallback",
+    engine: "google_maps",
+    results: [
+      {
+        title: "PCL (Perry-Castañeda Library)",
+        address: "101 E 21st St, Austin, TX",
+        rating: 4.6,
+        type: "library",
+        maps_url: "https://maps.google.com/?q=Perry-Castaneda+Library",
+      },
+      {
+        title: "GDC (Gates Dell Complex)",
+        address: "2317 Speedway, Austin, TX",
+        rating: 4.7,
+        type: "university",
+        maps_url: "https://maps.google.com/?q=Gates+Dell+Complex",
+      },
+      {
+        title: "Spider House Cafe",
+        address: "2908 Fruth St, Austin, TX",
+        rating: 4.5,
+        type: "cafe",
+        maps_url: "https://maps.google.com/?q=Spider+House+Cafe",
+      },
+    ],
+  },
+  calendar: {
+    source: "demo_fallback",
+    engine: "google_events",
+    results: [
+      {
+        title: "HackTX Opening Ceremony",
+        date: "Sat, Oct 25 · 10:00 AM",
+        venue: "GDC Auditorium",
+        link: "https://hacktx.com",
+      },
+      {
+        title: "UTCS Career Fair",
+        date: "Tue, Oct 28 · 1:00 PM",
+        venue: "PCL",
+        link: "https://www.cs.utexas.edu",
+      },
+      {
+        title: "Campus photo walk meetup",
+        date: "Sun, Oct 27 · 5:30 PM",
+        venue: "Main Mall",
+        link: "https://maps.google.com/?q=UT+Austin+Main+Mall",
+      },
+    ],
+  },
+  social: {
+    source: "demo_fallback",
+    engine: "google",
+    result: {
+      kind: "github",
+      handle: "mayachen",
+      display_name: "mayachen",
+      bio: "Builder · UT Austin · open to HackTX squads",
+      profile_url: "https://github.com/mayachen",
+      notes: "Public profile signals: React, campus tools, climate apps.",
+    },
+  },
+  serpapi_configured: false,
 };

@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { api } from "./client";
+import { api, SEED_USERS } from "./client";
 
 describe("enrichmentContext", () => {
   beforeEach(async () => {
-    await api.devLogin();
+    await api.devLogin(SEED_USERS[0]);
   });
 
   it("returns Maps, calendar, social, and location signals from demo SerpAPI shape", async () => {
