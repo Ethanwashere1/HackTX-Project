@@ -1,10 +1,12 @@
 """Person profiles and per-event match text, plus hooks for the later pipeline steps.
 
-A user has one Profile (socials, social_notes, interview summary) shared across events. Each
-EventMember holds that event's answers and fields and the combined `profile_text`, which is what
-gets embedded and sent to the agents' rerank. Whenever the profile or a membership changes, rebuild
-the affected texts (refresh_member_texts) so every event sees the change.
+A user has one Profile (socials, social_notes, interview summary, AI overview) shared across
+events. Each EventMember holds that event's answers and fields and the combined `profile_text`,
+which is what gets embedded and sent to the agents' rerank. Whenever the profile or a membership
+changes, rebuild the affected texts (refresh_member_texts) so every event sees the change.
 """
+
+from __future__ import annotations
 
 import logging
 from collections.abc import Callable
@@ -14,7 +16,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlmodel import Session, select
 
 from app.ids import new_id
-from app.models import Event, EventMember, Profile, Question
+from app.models import Event, EventMember, Profile, Question, User
 from app.models.base import utcnow
 from app.services.events import event_questions
 
@@ -48,6 +50,35 @@ def merge_socials(
     ]
 
 
+def display_summary(profile: Profile | None) -> str | None:
+    """Prefer AI overview over interview summary (CONTRACT §1 / §4 / team page)."""
+    if profile is None:
+        return None
+    return profile.overview or profile.summary
+
+
+def topic_signals(traits: dict[str, Any] | None) -> list[str]:
+    """Split traits['topics'] into a list for the enriched /recommend payload."""
+    if not traits:
+        return []
+    raw = traits.get("topics")
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        return [str(t).strip() for t in raw if str(t).strip()]
+    return [part.strip() for part in str(raw).split(",") if part.strip()]
+
+
+def group_need(traits: dict[str, Any] | None) -> str | None:
+    if not traits:
+        return None
+    value = traits.get("group_need")
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
 def _fmt(value: Any) -> str:
     if isinstance(value, list):
         return ", ".join(str(v) for v in value)
@@ -59,7 +90,8 @@ def build_member_text(
 ) -> str:
     """Plain-text match profile for one event membership. Deterministic for a given input.
 
-    The event's fields and answers, then the person profile: socials, public info, interview summary.
+    The event's fields and answers, then the person profile: socials, public info, overview,
+    interview summary and traits (CONTRACT §4 matching signals).
     """
     lines = [f"Event: {event.name} ({event.type}, {event.tone})"]
     for key, value in (member.fields or {}).items():
@@ -73,8 +105,14 @@ def build_member_text(
             lines.append("Socials: " + ", ".join(f"{s['kind']} {s['value']}" for s in profile.socials))
         if profile.social_notes:
             lines.append(f"Public info: {profile.social_notes}")
+        if profile.overview:
+            lines.append(f"Overview: {profile.overview}")
         if profile.summary:
             lines.append(f"Interview summary: {profile.summary}")
+        if profile.traits:
+            lines.append(
+                "Traits: " + ", ".join(f"{k}={_fmt(v)}" for k, v in sorted(profile.traits.items()))
+            )
     return "\n".join(lines)
 
 
@@ -105,8 +143,8 @@ def refresh_member_texts(
     """Rebuild and commit `profile_text` for the user's memberships (all, or in `event_ids`), then
     call on_member_text_changed. Returns the affected event_member ids.
 
-    Call it after changing the user's Profile (interview summary, social notes). The hook runs
-    inline here, so from a request handler prefer calling this in a background task.
+    Call it after changing the user's Profile (interview summary, social notes, overview). The hook
+    runs inline here, so from a request handler prefer calling this in a background task.
     """
     ids = rebuild_member_texts(db, user_id, event_ids)
     db.commit()
@@ -137,6 +175,109 @@ def schedule_social_lookup(user_id: str, socials: list[dict[str, Any]]) -> None:
     from app.services.socials import lookup_socials  # imported here: socials imports this module
 
     lookup_socials(user_id, socials)
+
+
+def _latest_membership(
+    db: Session, user_id: str, event_id: str | None
+) -> tuple[Event | None, EventMember | None]:
+    if event_id is not None:
+        event = db.get(Event, event_id)
+        member = db.exec(
+            select(EventMember).where(
+                EventMember.event_id == event_id, EventMember.user_id == user_id
+            )
+        ).first()
+        return event, member
+    member = db.exec(
+        select(EventMember)
+        .where(EventMember.user_id == user_id)
+        .order_by(EventMember.joined_at.desc(), EventMember.id.desc())
+    ).first()
+    if member is None:
+        return None, None
+    return db.get(Event, member.event_id), member
+
+
+def overview_request_body(
+    db: Session, user: User, profile: Profile, *, event_id: str | None = None
+) -> dict[str, Any]:
+    """Build the CONTRACT §8 POST /profile-overview request body."""
+    event, member = _latest_membership(db, user.id, event_id)
+    body: dict[str, Any] = {
+        "user": {"user_id": user.id, "name": user.name},
+        "answers": dict(member.answers) if member and member.answers else {},
+        "fields": dict(member.fields) if member and member.fields else {},
+        "social_notes": profile.social_notes,
+        "interview_summary": profile.summary,
+        "interview_traits": dict(profile.traits) if profile.traits else {},
+    }
+    if event is not None:
+        body["event"] = {
+            "event_id": event.id,
+            "name": event.name,
+            "type": event.type,
+            "tone": event.tone,
+        }
+    return body
+
+
+def apply_overview_result(profile: Profile, result: dict[str, Any]) -> None:
+    """Persist overview and merge returned traits onto the profile (not committed)."""
+    profile.overview = result["overview"]
+    incoming = result.get("traits") or {}
+    if isinstance(incoming, dict) and incoming:
+        profile.traits = {**(profile.traits or {}), **incoming}
+    profile.updated_at = utcnow()
+
+
+def regenerate_overview(db: Session, user_id: str, *, event_id: str | None = None) -> bool:
+    """Call agents /profile-overview, persist on success, refresh member texts. Returns True if saved.
+
+    Opens no sessions of its own; caller provides `db`. Failures leave the prior overview alone.
+    """
+    from app.services import agents as agents_client
+
+    user = db.get(User, user_id)
+    if user is None:
+        return False
+    profile = get_or_create_profile(db, user_id, lock=True)
+    body = overview_request_body(db, user, profile, event_id=event_id)
+    result = agents_client.fetch_profile_overview(body)
+    if result is None:
+        return False
+    apply_overview_result(profile, result)
+    db.add(profile)
+    db.commit()
+    refresh_member_texts(db, user_id)
+    return True
+
+
+def schedule_overview_refresh(user_id: str, event_id: str | None = None) -> None:
+    """Background hook: regenerate the shared profile overview, then re-embed via refresh.
+
+    Must never raise into the caller. Opens its own DB session.
+    """
+    from app import db as dbmod
+
+    try:
+        with Session(dbmod.get_engine()) as db:
+            ok = regenerate_overview(db, user_id, event_id=event_id)
+            if ok:
+                log.info("overview refreshed for user %s", user_id)
+            else:
+                log.info("overview unchanged for user %s (agents unavailable or failed)", user_id)
+    except Exception:
+        log.exception("schedule_overview_refresh failed for user %s", user_id)
+
+
+def on_interview_summary_saved(user_id: str, event_id: str | None = None) -> None:
+    """Call after interview summary/traits are committed: regenerate overview + re-embed."""
+    schedule_overview_refresh(user_id, event_id)
+
+
+def on_social_notes_updated(user_id: str) -> None:
+    """Call after SerpAPI (or similar) writes profiles.social_notes: regenerate overview + re-embed."""
+    schedule_overview_refresh(user_id)
 
 
 def run_hook(hook: Callable[..., None], *args: Any) -> None:

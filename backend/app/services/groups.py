@@ -26,7 +26,7 @@ def default_group_name(db: Session, event_id: str) -> str:
     taken = set(db.exec(select(Group.name).where(Group.event_id == event_id)).all())
     name = ""
     for _ in range(10):
-        name = f"Team {secrets.choice(_ADJECTIVES)} {secrets.choice(_NOUNS)}"
+        name = f"Squad {secrets.choice(_ADJECTIVES)} {secrets.choice(_NOUNS)}"
         if name not in taken:
             return name
     return name
@@ -125,25 +125,36 @@ def leave_group(db: Session, group_id: str, user: User) -> None:
 
 
 def _person(db: Session, user_id: str) -> dict:
-    """Name, profile summary and contacts. Only call this for group-mates or connections."""
+    """Name, profile summary and contacts. Only call this for group-mates or connections.
+
+    `summary` prefers the AI overview over the interview summary (CONTRACT §1 / team page).
+    """
+    from app.services.profiles import display_summary
+
     user = db.get(User, user_id)
-    summary = db.exec(select(Profile.summary).where(Profile.user_id == user_id)).first()
+    profile = db.exec(select(Profile).where(Profile.user_id == user_id)).first()
     return {
         "user_id": user_id,
         "name": user.name if user else None,
-        "summary": summary,
+        "summary": display_summary(profile),
         "contacts": list_contacts(db, user_id),
     }
 
 
 def group_payload(db: Session, group: Group) -> dict:
-    """The team page body. Includes contacts, so only return it to the group's members."""
+    """The squad page body. Includes contacts, so only return it to the group's members.
+
+    The earliest member is treated as the squad owner (hosts / founders can't \"join\" again).
+    """
+    member_ids = group_member_ids(db, group.id)
+    owner_id = member_ids[0] if member_ids else None
     return {
         "group_id": group.id,
         "event_id": group.event_id,
         "name": group.name,
         "thread_id": group.thread_id,
-        "members": [_person(db, uid) for uid in group_member_ids(db, group.id)],
+        "owner_user_id": owner_id,
+        "members": [_person(db, uid) for uid in member_ids],
     }
 
 

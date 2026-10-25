@@ -104,7 +104,7 @@ export function OrgFeedPage() {
     <div className="feed su-page su-fade-up">
       <div className="feed-hero">
         <div>
-          <h1 className="su-page-title">Hey {me?.name.split(" ")[0] ?? "there"}, find your next thing.</h1>
+          <h1 className="su-page-title">Hey {me?.name.split(" ")[0] ?? "there"}, find your squad.</h1>
           <p className="su-page-sub">
             Good friendships start with shared moments. What will you get into?
           </p>
@@ -187,6 +187,8 @@ export function OrgFeedPage() {
           })}
         </div>
       </section>
+
+      <LocalSignals />
 
       <aside className="feed-aside su-card">
         <h3>How matching works</h3>

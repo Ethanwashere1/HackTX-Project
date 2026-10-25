@@ -25,17 +25,25 @@ export function GroupPageView() {
   }, [groupId]);
 
   if (error) return <div className="su-page">Error: {error}</div>;
-  if (!group) return <div className="su-page">Loading team…</div>;
+  if (!group) return <div className="su-page">Loading squad…</div>;
+
+  const isOwner = Boolean(me && group.owner_user_id === me.user_id);
+  const owner = group.members.find((m) => m.user_id === group.owner_user_id);
 
   return (
     <div className="su-page su-fade-up">
-      <span className="su-badge su-badge-warm">Formed team</span>
+      <span className="su-badge su-badge-warm">Formed squad</span>
       <h1 className="su-page-title" style={{ marginTop: "0.75rem" }}>
         {group.name}
       </h1>
       <p className="su-page-sub">
         {eventName ?? "Event"} · {group.members.length} members · contacts visible to members only
       </p>
+      {isOwner ? (
+        <p style={{ color: "var(--su-text-muted)", marginTop: "-0.5rem" }}>
+          You’re the squad owner — you can’t send a join request to your own squad.
+        </p>
+      ) : null}
 
       <div style={{ display: "flex", gap: "0.75rem", marginBottom: "1.25rem", flexWrap: "wrap" }}>
         {group.thread_id ? (

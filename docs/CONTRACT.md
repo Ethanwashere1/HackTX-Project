@@ -1,5 +1,5 @@
 # SquadUp API Contract — DRAFT v1.0-pre
-_Status: draft, 2026-10-24, rewritten for the new product spec. Sections 8–9 (backend ↔ agents, interview WebSocket) are **approved by the Gemini dev**; sections 1–7 await the frontend devs. Changes go through the planner and get a changelog line at the bottom._
+_Status: draft, 2026-10-25, rewritten for the new product spec. Sections 8–9 (backend ↔ agents, interview WebSocket) are **approved by the Gemini dev**; sections 1–7 await the frontend devs. AI feature endpoints in §1 (`/api/me/profile`), §3 (`/api/question-suggestions`), and §8 (`/profile-overview`, `/generate-questions`, enriched `/recommend`) are **planner-proposed** — Gemini and frontend should confirm before calling M1/M2 done. Changes go through the planner and get a changelog line at the bottom._
 
 ## Conventions
 - **Services:**
@@ -40,6 +40,20 @@ _Status: draft, 2026-10-24, rewritten for the new product spec. Sections 8–9 (
  "contacts": [{"kind": "discord", "value": "ana#1234"}], "interviewed": true}
 ```
 - **`PUT /api/me/contacts`:** body `{"contacts": [{"kind": "phone", "value": "+1…"}]}` (max 20, replaces the whole list). Returns 200 `{"contacts": [...]}`. Contacts are visible only to the user's group-mates and connections.
+- **`GET /api/me/profile`:** the signed-in user's shared profile (one per person across events).
+```json
+{"user_id": "usr_a1", "name": "Ana Ruiz", "email": "ana@utexas.edu",
+ "overview": "Frontend-leaning builder who wants a climate hack with a chill but ambitious team.",
+ "summary": "Loves climate apps; prefers pairing; available all weekend.",
+ "traits": {"working_style": "pairing", "ambition": "win", "topics": "climate,react",
+            "group_need": "hackathon teammates"},
+ "contacts": [{"kind": "discord", "value": "ana#1234"}],
+ "socials": [{"kind": "github", "value": "ana-ruiz"}]}
+```
+  - `overview` is the AI-generated blurb from questionnaire answers + social notes + interview (null until generated).
+  - `summary` is the interview-only summary (null if the user skipped the interview).
+  - `traits` merges interview traits with overview traits (topics, group_need, working style, etc.).
+  - Recommendations and team pages prefer `overview` when present, else `summary`.
 - **Login errors:**
   - `/login` returns 503 `oauth_not_configured` while the Google credentials are unset.
   - On the callback, a missing, expired (10 min) or mismatched `state` returns 400 `invalid_oauth_state`; a missing `code` returns 400 `bad_request`; a Google token or profile failure (including a non-JSON response) returns 502 `oauth_failed`; an unverified Google email returns 403 `email_not_verified`.
@@ -142,11 +156,29 @@ Endpoints:
 - Event members only: 403 `forbidden` before joining; 409 `interview_disabled` when the event has `interview_enabled: false`.
 - Each call issues a new token, valid for `expires_in` seconds. The backend stores only its hash.
 
+**`POST /api/question-suggestions`** (host AI assist for the questionnaire builder; session auth)
+```json
+{"name": "HackTX team-up", "type": "structured", "tone": "casual",
+ "description": "Find your hackathon team",
+ "existing_questions": [{"text": "What role do you want?", "kind": "single_choice",
+                         "options": ["frontend", "backend", "design", "ml"]}],
+ "count": 3, "hint": "availability and what they want to build"}
+// 200
+{"questions": [{"text": "How many hours can you commit this weekend?", "kind": "single_choice",
+                "options": ["under 8", "8–16", "all weekend"], "required": true},
+               {"text": "What do you want to build?", "kind": "text", "options": null, "required": false}]}
+```
+- The backend proxies to agents `POST /generate-questions` (section 8). It does **not** create an event; the host still POSTs `/api/events` with the chosen questions.
+- `count` defaults to 3 (1–10). `existing_questions` and `hint` are optional. `name`/`type`/`tone` should match the create-event form so far.
+- Returned questions use the same `kind` enum as create-event (`text | single_choice | multi_choice | number`). `single_choice` / `multi_choice` include `options`; `text` / `number` use `options: null`.
+- On agents failure or timeout (10 s): 502 `agents_unavailable`. Frontend should keep the manual builder usable.
+
 ## 4. Recommendations
 **`GET /api/events/{event_id}/recommendations?limit=10`** (members only)
 ```json
 {"ranked_by": "gemini",
- "people": [{"user_id": "usr_b2", "name": "Ben Li", "summary": "Backend dev, wants to win",
+ "people": [{"user_id": "usr_b2", "name": "Ben Li",
+             "summary": "Backend dev who wants to win; overlapping climate + API interests.",
              "score": 0.87, "reason": "You'd cover frontend and he covers backend; both want to ship a full demo."}],
  "groups": [{"group_id": "grp_1", "name": "Team Nebula", "size": 2, "max_size": 4,
              "members": [{"user_id": "usr_c3", "name": "Cara"}],
@@ -286,14 +318,20 @@ The backend stores the transcript and summary on the user's profile, then re-emb
 ```json
 // request
 {"event": {"event_id": "evt_h1", "type": "structured", "tone": "casual", "description": "…"},
- "viewer": {"user_id": "usr_a1", "profile_text": "…"},
- "candidates": [{"candidate_type": "user", "id": "usr_b2", "profile_text": "…", "similarity": 0.83},
-                {"candidate_type": "group", "id": "grp_1", "profile_text": "…", "similarity": 0.79}],
+ "viewer": {"user_id": "usr_a1", "profile_text": "…",
+            "traits": {"working_style": "pairing", "topics": "climate,react", "group_need": "hackathon teammates"},
+            "topic_signals": ["climate", "react"], "group_need": "hackathon teammates"},
+ "candidates": [{"candidate_type": "user", "id": "usr_b2", "profile_text": "…", "similarity": 0.83,
+                 "traits": {"working_style": "async", "topics": "climate,apis"},
+                 "topic_signals": ["climate", "apis"], "group_need": "hackathon teammates"},
+                {"candidate_type": "group", "id": "grp_1", "profile_text": "…", "similarity": 0.79,
+                 "traits": {}, "topic_signals": ["design"], "group_need": null}],
  "limit": 10}
 // 200
 {"results": [{"candidate_type": "user", "id": "usr_b2", "score": 0.87, "reason": "…"}]}
 ```
 - The response may only contain IDs from `candidates`.
+- `traits`, `topic_signals`, and `group_need` are optional but preferred. The Recommender must weigh: overlapping topics / prior similar interests, complementary skills, shared `group_need`, and traits that suggest they work well together (working style, ambition, availability) — not only raw text similarity.
 - Timeout is 20 s. On error, timeout or an invalid response, the backend returns the similarity order with `ranked_by: "similarity"`.
 
 ### GET /health (both services)

@@ -1,4 +1,4 @@
-"""Contract section 1: the signed-in user and their contact methods."""
+"""Contract section 1: the signed-in user, contact methods, and shared profile."""
 
 from typing import Literal
 

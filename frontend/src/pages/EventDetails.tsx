@@ -4,6 +4,7 @@ import { api } from "../api/client";
 import { ApiError, errorMessage } from "../api/errors";
 import { formatWhen } from "../api/format";
 import type { EventDetail } from "../api/types";
+import { useAuth } from "../auth/AuthContext";
 
 export function EventDetailsPage() {
   const { eventId = "" } = useParams();
@@ -55,7 +56,10 @@ export function EventDetailsPage() {
           <ul style={{ color: "var(--su-text-muted)", lineHeight: 1.8 }}>
             <li>Starts: {formatWhen(event.starts_at)}</li>
             <li>Tone: {event.tone}</li>
-            <li>Host: {event.host.name}</li>
+            <li>
+              Host: {event.host.name}
+              {isHost ? " (you)" : ""}
+            </li>
             <li>
               Members: {event.stats.member_count}
               {structured
@@ -70,11 +74,16 @@ export function EventDetailsPage() {
                   : null}
               </li>
             ) : null}
+            <li>Questions: {event.questions.length}</li>
             <li>Interview: {event.interview_enabled ? "Optional voice intro available" : "Off"}</li>
             {joined ? <li>You joined {formatWhen(event.my_membership?.joined_at)}</li> : null}
           </ul>
           <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
-            {!joined ? (
+            {isHost ? (
+              <p style={{ margin: 0, color: "var(--su-text-muted)", lineHeight: 1.5 }}>
+                You’re the host — you manage this event and can’t join it as a participant.
+              </p>
+            ) : !joined ? (
               <Link className="su-btn su-btn-primary" to={`/events/${event.event_id}/join`}>
                 Join event
               </Link>
@@ -102,7 +111,7 @@ export function EventDetailsPage() {
         </article>
 
         <article className="su-card" style={{ padding: "1.2rem" }}>
-          <h3>Questionnaire preview</h3>
+          <h3>Questionnaire preview ({event.questions.length})</h3>
           <ol style={{ color: "var(--su-text-muted)", lineHeight: 1.7 }}>
             {event.questions.map((q) => (
               <li key={q.question_id}>

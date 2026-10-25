@@ -146,6 +146,12 @@ def join_event(
     event_id: str, body: JoinBody, user: CurrentUser, db: DbSession, background: BackgroundTasks
 ):
     event = svc.get_visible_event(db, event_id, user)
+    if event.host_id == user.id:
+        raise AppError(
+            403,
+            "is_host",
+            "You're the host of this event — hosts manage the event and can't join as a participant",
+        )
     if svc.get_membership(db, event.id, user.id) is not None:
         raise AppError(409, "already_joined", "You already joined this event")
     questions = svc.event_questions(db, event.id)
@@ -153,20 +159,21 @@ def join_event(
     fields = svc.validate_fields(event.required_fields, body.fields)
     socials = [{"kind": s.kind, "value": s.value} for s in body.socials]
 
+    user_id, event_id_val, interview_available = user.id, event.id, event.interview_enabled
     try:
         # The person profile is shared across events: submitted socials replace the same kinds.
-        profile = profile_svc.get_or_create_profile(db, user.id, lock=True)
+        profile = profile_svc.get_or_create_profile(db, user_id, lock=True)
         merged = profile_svc.merge_socials(profile.socials, socials)
         socials_changed = merged != profile.socials
         if socials_changed:
             profile.socials = merged
             profile.updated_at = utcnow()
             db.add(profile)
-        db.add(EventMember(event_id=event.id, user_id=user.id, answers=answers, fields=fields))
+        db.add(EventMember(event_id=event_id_val, user_id=user_id, answers=answers, fields=fields))
         db.flush()
         # New socials change the text of every event the user is in, not just this one.
         member_ids = profile_svc.rebuild_member_texts(
-            db, user.id, None if socials_changed else [event.id]
+            db, user_id, None if socials_changed else [event_id_val]
         )
         db.commit()
     except IntegrityError:
@@ -175,11 +182,15 @@ def join_event(
     # After the response; failures are logged and never affect the join.
     background.add_task(profile_svc.run_hook, profile_svc.on_member_text_changed, member_ids)
     if socials:
-        background.add_task(profile_svc.run_hook, profile_svc.schedule_social_lookup, user.id, socials)
+        background.add_task(profile_svc.run_hook, profile_svc.schedule_social_lookup, user_id, socials)
+    # Overview regen is best-effort; join stays 201 even when agents is down.
+    background.add_task(
+        profile_svc.run_hook, profile_svc.schedule_overview_refresh, user_id, event_id_val
+    )
     return {
-        "event_id": event.id,
+        "event_id": event_id_val,
         "profile_status": "ready",
-        "interview": {"available": event.interview_enabled},
+        "interview": {"available": interview_available},
     }
 
 

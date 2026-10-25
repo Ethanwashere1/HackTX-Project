@@ -24,7 +24,9 @@ Read from the environment, `agents/api.env` and `agents/.env` (both gitignored; 
 
 ## Endpoints
 - `GET /health` → `{"ok": true, "service": "agents"}`
-- `POST /recommend` (`X-Internal-Key`): contract section 8. Only candidate IDs from the request come back (deduped, score clamped to 0..1, at most `limit`). Errors: 401 `unauthenticated`, 422 `validation_error`, 502 `recommender_failed`, 503 `gemini_not_configured`; the backend then uses similarity order.
+- `POST /recommend` (`X-Internal-Key`): contract section 8. Reranks with optional `traits` / `topic_signals` / `group_need` on viewer and candidates. Only candidate IDs from the request come back (deduped, score clamped to 0..1, at most `limit`). Errors: 401 `unauthenticated`, 422 `validation_error`, 502 `recommender_failed`, 503 `gemini_not_configured`; the backend then uses similarity order.
+- `POST /profile-overview` (`X-Internal-Key`): questionnaire answers + social notes + interview → `{overview, traits}` (topics, group_need, working style, …). Errors: 502 `overview_failed`, 503 `gemini_not_configured`.
+- `POST /generate-questions` (`X-Internal-Key`): host QuizGen → `{questions: [{text, kind, options, required}]}`. Dedupes existing texts; choice kinds need ≥2 options. Errors: 502 `quizgen_failed`, 503 `gemini_not_configured`.
 - `WS /ws/interview?token=…&input=voice|text`: contract section 9.
   - On connect it fetches `GET {BACKEND_URL}/internal/interviews/{token}/config`. Any failure there sends `error` `auth_failed` and closes.
   - Voice: browser PCM16 16 kHz in, 24 kHz `audio` out, plus `transcript`, `turn_complete` and `interrupted`. Transcripts stream as `final: false` chunks (append them), then one `final: true` message with the full utterance (it replaces the chunks).

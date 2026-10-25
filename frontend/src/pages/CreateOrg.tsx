@@ -45,7 +45,7 @@ export function CreateOrgPage() {
         Create an organization
       </h1>
       <p className="su-page-sub">
-        Bring people, groups, and events together under one shared purpose.
+        Bring people, squads, and events together under one shared purpose.
       </p>
 
       <form className="su-card" style={{ padding: "1.25rem", maxWidth: 720 }} onSubmit={(e) => void onSubmit(e)}>

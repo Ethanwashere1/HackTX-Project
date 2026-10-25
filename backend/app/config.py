@@ -78,7 +78,12 @@ class Settings(BaseSettings):
     # Cached social lookups (social_lookups) are reused for this long.
     social_lookup_ttl_hours: float = 24
     agents_url: str = "http://localhost:8000"
+    # Seconds before the agents /recommend call gives up (similarity order is used). Default 20
     agents_timeout_s: float = 20
+    # Seconds before /profile-overview gives up (prior overview kept). Default 15
+    agents_overview_timeout_s: float = 15
+    # Seconds before /generate-questions gives up (502 agents_unavailable). Default 10
+    agents_questions_timeout_s: float = 10
     # Browser-facing interview WebSocket. Empty -> derived from AGENTS_URL (http->ws) + /ws/interview.
     agents_ws_url: str = ""
     internal_api_key: str = ""

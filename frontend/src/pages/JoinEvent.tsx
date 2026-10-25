@@ -42,6 +42,7 @@ function fieldValue(raw: string): FieldValue | null {
 export function JoinEventPage() {
   const { eventId = "" } = useParams();
   const navigate = useNavigate();
+  const { me } = useAuth();
   const [event, setEvent] = useState<EventDetail | null>(null);
   const [answers, setAnswers] = useState<Record<string, string | string[]>>({});
   const [fields, setFields] = useState<Record<string, string>>({});
@@ -111,7 +112,10 @@ export function JoinEventPage() {
   return (
     <div className="su-page su-fade-up">
       <h1 className="su-page-title">Join {event.name}</h1>
-      <p className="su-page-sub">Answer a few questions so matching has something real to work with.</p>
+      <p className="su-page-sub">
+        Answer {event.questions.length} question{event.questions.length === 1 ? "" : "s"} so matching
+        has something real to work with.
+      </p>
 
       <form className="su-card" style={{ padding: "1.25rem", maxWidth: 720 }} onSubmit={(e) => void onSubmit(e)}>
         {event.questions.map((q) => (

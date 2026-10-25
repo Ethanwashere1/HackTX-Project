@@ -13,10 +13,10 @@ function orgMono(name: string) {
 
 export function AppShell() {
   const { me, logout } = useAuth();
-  const navigate = useNavigate();
   const location = useLocation();
   const [pendingIncoming, setPendingIncoming] = useState(0);
   const [menuOpen, setMenuOpen] = useState(false);
+  const onOrgFeed = /^\/orgs\/[^/]+$/.test(location.pathname) && !location.pathname.endsWith("/new");
 
   useEffect(() => {
     setMenuOpen(false);
@@ -100,7 +100,7 @@ export function AppShell() {
             <strong>{primary?.name ?? "Find an organization"}</strong>
             <small>{primary ? "Campus community" : "Join or create one"}</small>
           </span>
-        </button>
+        </div>
 
         <nav className="shell-nav" aria-label="Main">
           {nav.map((item) => (
